@@ -1,5 +1,6 @@
-import math
 import functools
+import math
+
 
 class LinkDirection:
     UNIDIRECTIONAL = 1
@@ -20,9 +21,13 @@ class NetworkNode:
         if parent_type is not None:
             inherit = NetworkLink(self, parent_type, LinkDirection.UNIDIRECTIONAL, relationship="inherits")
             self.add_link(inherit)
+            parent_type.add_link(NetworkLink(parent_type, self, LinkDirection.UNIDIRECTIONAL, relationship="subtype"))
 
     def __str__(self):
         return self.label
+
+    def link_str(self):
+        return str(list(map(lambda x: x.node2.label + "(" + str(x.relationship) + ")", self.links)))
 
     def add_codelet(self, codelet, children_only=False):
         """

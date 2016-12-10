@@ -3,11 +3,13 @@ Python implementation of Numbo
 Based on reading in _Fluid Concepts and Creative Analogies_
 """
 
+import functools
+import random
+import sys
+
 from coderack import Rack
 from coderack import RackUrgency
 from network import Network, LinkDirection, NetworkLink, NetworkNode
-import functools
-import random
 
 
 # Initialize PNet
@@ -36,9 +38,21 @@ class NumboCytoNode:
             # TODO: This seems fragile, as we may add new fields
             link.node2.links.append(NetworkLink(link.node2, self, relationship=link.relationship, weight=link.weight))
 
+    def linked_node_strings(self):
+        return list(map(lambda x: str(x.node2), self.links))
 
     def __str__(self):
-        return self.ntype + ":" + self.label + "(" + self.status + ")"
+        selfstr = ""
+        if self.ntype == NumboNodeType.OPERATION:
+            selfstr += "(" + self.label.join(self.linked_node_strings()) + ")"
+        else:
+            selfstr = self.ntype + ":" + self.label
+            if self.ntype == NumboNodeType.BLOCK:
+                selfstr = "[" + selfstr
+                for l in self.links:
+                    selfstr += "=" + str(l.node2)
+                selfstr += "]"
+        return selfstr
 
 
 def initPnet():
@@ -90,16 +104,21 @@ def initPnet():
             sum.add_link(NetworkLink(thesum, plus, direction=LinkDirection.BIDIRECTIONAL, relationship=thesum))
 
             # TODO: Should these be bi-directional here?
-            plus.add_link(NetworkLink(plus, node, direction=LinkDirection.BIDIRECTIONAL, relationship=addopt))
-            plus.add_link(NetworkLink(plus, bnode, direction=LinkDirection.BIDIRECTIONAL, relationship=addopt))
+            # Note that we are actually creating *instances* of the actual "ideal" type of the number
+            plus.add_link(
+                NetworkLink(plus, NetworkNode(node.label, parent_type=node), direction=LinkDirection.BIDIRECTIONAL,
+                            relationship=addopt))
+            plus.add_link(
+                NetworkLink(plus, NetworkNode(bnode.label, parent_type=bnode), direction=LinkDirection.BIDIRECTIONAL,
+                            relationship=addopt))
 
 
     return pnet
 
 
-def cytoplasm_find_exact(label, cytoplasm):
+def cytoplasm_find_exact(label, cytoplasm, allowed_types=['block', 'brick']):
     for elem in cytoplasm:
-        if elem.label == label:
+        if elem.label == label and elem.ntype in allowed_types:
             print "\tFound exact of " + label + " in cytoplasm"
             if elem.status == "free":
                 return elem
@@ -141,9 +160,9 @@ def cytoplasm_find_less(label, cytoplasm):
     return None
 
 
-def cytoplasm_find_near(label, cytoplasm):
+def cytoplasm_find_near(label, cytoplasm, allowed_types=['block', 'brick']):
     for elem in cytoplasm:
-        if int(elem.label) == int(label) + 1 or int(elem.label) == int(label) - 1:
+        if elem.ntype in allowed_types and (int(elem.label) == int(label) + 1 or int(elem.label) == int(label) - 1):
             print "\tFound one near of " + label + " in cytoplasm: " + elem.label
             if elem.status == "free":
                 return elem
@@ -192,7 +211,7 @@ def codelet_read_brick(vision, pnet=None, cytoplasm=None):
     return codelets
 
 
-def codelet_seek_reasonable_fascimile(desired, proposed, new_partials, pnet=None, cytoplasm=None):
+def codelet_seek_reasonable_fascimile(desired, proposed, new_partials, pnet=None, cytoplasm=None, attempt=1):
     """
     Try to locate free Cyto nodes which are reasonably close
     to the given targets, and if available, push the next
@@ -202,7 +221,8 @@ def codelet_seek_reasonable_fascimile(desired, proposed, new_partials, pnet=None
     new_partials - the codelets that will get run if we succeed
     :return:
     """
-    print "CODELET: seek_reasonable_fascimile: " + str(desired)
+    print "CODELET: seek_reasonable_fascimile: " + str(desired) + " ATTEMPT: " + str(attempt)
+    assert len(desired) > 1
 
     found = []
     for des in desired:
@@ -216,18 +236,34 @@ def codelet_seek_reasonable_fascimile(desired, proposed, new_partials, pnet=None
 
             found.append(node)
 
+    returned = []
     if len(found) == len(desired):
         # If we are here, we now have found all of our desired nodes
         # partials would be codelet_create_block()
-        returned = []
+
         for codelet in new_partials:
             # this assumes our partials take positional arguments corresponding to what we found
             returned.append(functools.partial(codelet, *found))
 
-        return returned
     else:
-        return None
+        if attempt < 2:
+            # Give it another shot... maybe this is more about reducing urgency?
+            returned.append(functools.partial(codelet_seek_reasonable_fascimile, desired, proposed, new_partials,
+                                              attempt=attempt + 1))
 
+    return returned
+
+
+def codelet_match_target(cytoplasm=None, pnet=None):
+    print "CODELET: match_target"
+
+    item = cytoplasm_find_exact(numboinput['target'], cytoplasm, allowed_types=['block'])
+    if item:
+        # TODO: We should perhaps just have access to the rack and clear it
+        print "Found solution!"
+        print str(item)
+        sys.exit()
+    return None
 
 def codelet_find_similar(needle, pnet=None,cytoplasm=None):
     """
@@ -252,6 +288,8 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
     :return:
     """
     print "CODELET: propose_operation from " + target_node.long_desc
+    print "\tTarget links: "
+    print target_node.link_str()
 
     # Fetch inputs
     parent = target_node.parent
@@ -263,10 +301,19 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
             needed = l.node2.label
             print "\tNeed to find " + needed
             links = target_node.find_links(needed)
+            found = False
             if links:
+                print "\tLINKS ARE: " + str(list(map(lambda x: x.node2.label + "(" + str(x.relationship) + ")", links)))
                 for nl in links:
                     if nl.node2 not in inputs:
                         inputs.append(nl.node2)
+                        found = True
+                        break
+                    else:
+                        print nl.node2.label + " already being used->" + str(list(map(lambda x: x.label, inputs)))
+                if not found:
+                    print "\tERROR: all " + needed + " already used or not found"
+                    return None
             else:
                 print "\tERROR: Unable to find " + needed
                 return None
@@ -284,6 +331,7 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
 
     codelets = []
     inputs = list(map(lambda x: x.label, inputs))
+    print "\tAdding codelet seek_reasonable_fascimile of " + str(inputs)
 
     fasc = functools.partial(codelet_seek_reasonable_fascimile, inputs, produces, [proposed_op])
     codelets.append(fasc)
@@ -316,11 +364,12 @@ def codelet_operation_add(node1, node2, pnet=None, cytoplasm=None):
         pNode = pnet.getNode(str(c))
         cNode = NumboCytoNode(str(c), NumboNodeType.BLOCK, networkNode=pNode)
         cOpNode = NumboCytoNode("+", NumboNodeType.OPERATION)
-        cOpNode.add_link(NetworkLink(cNode, node1))
-        cOpNode.add_link(NetworkLink(cNode, node2))
-        cNode.add_link(NetworkLink(cNode, cOpNode))
+        cOpNode.add_link(NetworkLink(cNode, node1, direction=LinkDirection.UNIDIRECTIONAL))
+        cOpNode.add_link(NetworkLink(cNode, node2, direction=LinkDirection.UNIDIRECTIONAL))
+        cNode.add_link(NetworkLink(cNode, cOpNode, direction=LinkDirection.UNIDIRECTIONAL))
 
         cytoplasm.append(cNode)
+        return [codelet_match_target]
 
 def debug_network():
     print "CYTOPLASM"
