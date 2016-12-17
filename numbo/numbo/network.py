@@ -38,7 +38,6 @@ class NetworkNode:
         else:
             self.codelets.append(codelet)
 
-
     def add_link(self, link):
         self.links.append(link)
         if link.direction == LinkDirection.BIDIRECTIONAL:
@@ -48,13 +47,31 @@ class NetworkNode:
     def links(self):
         return self.links
 
-    def find_links(self, label):
+    def find_links(self, relationship):
         """
         Find all nodes with the given link label from this one
-        :param label:
+        :param relationship:
         :return:
         """
-        return [l for l in self.links if str(l.relationship) == label]
+        return [l for l in self.links if str(l.relationship) == str(relationship)]
+
+    def has_link_to(self, label, relationship=None):
+        """
+        Return True if there is a link (optionally of a specific relationship) to a node with the given label
+        :param label:
+        :param relationship:
+        :return:
+        """
+        if relationship:
+            links = self.find_links(relationship)
+        else:
+            links = self.links
+
+        # TODO: Switch to proper python filter type thing
+        for l in links:
+            if l.node2.label == label:
+                return True
+        return False
 
     def all_codelets(self):
         returned = []
@@ -64,15 +81,20 @@ class NetworkNode:
 
         return returned
 
-    def activate(self, level=4):
+    def activate(self, level=4, visited=[], depth=0):
         """
         Activating a node will increase the activation level of this node
         as well as some links. Additionally, it may optionally return a list of
         codelets that should also get activated
         TODO: the activation energy of a node should decay over time
         """
+        if self in visited:
+            return []
+
+        visited.append(self)
+
         self.activation += level
-        print("[" + self.long_desc + "]: ACTIVATION@" + str(level) + "->" + str(self.activation))
+        print(('\t' * depth) + "[" + self.long_desc + "]: ACTIVATION@" + str(level) + "->" + str(self.activation))
 
         # TODO: Use a better stepping formula here
         sub_act = math.floor(level / 2)
@@ -87,15 +109,14 @@ class NetworkNode:
             for l in self.links:
                 end = l.node2
                 if str(l.relationship) is not "requires":
-                    print l.relationship
-
                     # The activation of a relationship temporarily increases
                     # the weight of that link for carrying the activation
                     # energy.
                     # TODO: How best to implement that?
-                    if type(l.relationship) is not str:
-                        l.relationship.activate(level=sub_act)
-                    returned_codelets.extend(end.activate(level=sub_act))
+                    if type(l.relationship) is not str and l.relationship not in visited:
+                        l.relationship.activate(level=sub_act, visited=visited, depth=depth + 1)
+                    if end not in visited:
+                        returned_codelets.extend(end.activate(level=sub_act, visited=visited, depth=depth + 1))
         return returned_codelets
 
 
@@ -117,7 +138,7 @@ class Network:
         self.topNodes = dict()
         self.nodes = []
 
-    def addNode(self, label, top=True):
+    def addNode(self, label, top=False):
         if type(label) is str:
             n = NetworkNode(label)
         else:
@@ -139,7 +160,7 @@ class Network:
     def activate(self, label, level=10):
         node = self.getNode(label)
         if node is not None:
-            return node.activate(level=level)
+            return node.activate(level=level, visited=[])
         else:
             print("WARNING: Have no node [" + label + "] in network")
 
