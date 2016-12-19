@@ -94,14 +94,14 @@ class NetworkNode:
         visited.append(self)
 
         self.activation += level
-        print(('\t' * depth) + "[" + self.long_desc + "]: ACTIVATION@" + str(level) + "->" + str(self.activation))
+        # print(('\t' * depth) + "[" + self.long_desc + "]: ACTIVATION@" + str(level) + "->" + str(self.activation))
 
         # TODO: Use a better stepping formula here
         sub_act = math.floor(level / 2)
 
         returned_codelets = []
         if self.activation > 3 and len(self.all_codelets()) > 0:
-            print "\t Activating codelets"
+            #print "\t Activating codelets"
             for c in self.all_codelets():
                 returned_codelets.append(functools.partial(c, target_node=self))
 

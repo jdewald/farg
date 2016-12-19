@@ -28,6 +28,7 @@ class NumboCytoNode:
         self.pnetNode = networkNode
         self.status = "free"
         self.links = []
+        self.attractiveness = 0
 
         # TODO: Should this just be the weight/activation level?
         self.attractiveness = 1
@@ -55,6 +56,127 @@ class NumboCytoNode:
                 selfstr += "]"
         return selfstr
 
+
+class Cytoplasm:
+    def __init__(self, coderack):
+        self.items = []
+        self.rack = coderack
+
+        # the higher the temperature, the more likely
+        # the execution of "destructive" codelets
+        self.temperature = 50
+
+    def append(self, item):
+        return self.items.append(item)
+
+    def extend(self, items):
+        return self.extend(items)
+
+    def __len__(self):
+        return len(self.items)
+
+    def __iter__(self):
+        return iter(self.items)
+
+    def step_attractiveness(self):
+        codelets = []
+        for c in self.items:
+            if c.ntype == NumboNodeType.BLOCK and c.attractiveness > 0 and c.status == 'free':
+                c.attractiveness -= 1
+        # TODO: Be more consistent in who can add codelets
+        return codelets
+
+    def decrease_temp(self, decrease=1):
+        self.temperature -= decrease
+        if self.temperature < 0:
+            print "\tWARNING: temperature has gone below 0, are we not done?"
+            #            assert False
+            self.temperature = 0
+        return []
+
+    def increase_temp(self, increase=1):
+        self.temperature += increase
+        if self.temperature > 100:
+            print "\tWARNING: temperature has gone above 100, let's do some stuff"
+            self.temperature = 100
+            rack.add(functools.partial(codelet_propose_destruction, cytoplasm=self), RackUrgency.HIGH)
+        else:
+            return []
+
+    def clear(self):
+        del self.items[:]
+
+    def find_exact(self, label, allowed_types=['block', 'brick']):
+        for elem in self.items:
+            if elem.label == label and elem.ntype in allowed_types:
+                print "\tFound exact of " + label + " in cytoplasm"
+                if elem.status == "free":
+                    return elem
+                else:
+                    print "\tBut it is not free..."
+        return None
+
+    def find_near(self, label, allowed_types=['block', 'brick']):
+        for elem in self:
+            try:
+                if elem.ntype in allowed_types and elem.pnetNode.has_link_to(label, "similar"):
+                    print "\tFound one near of " + label + " in cytoplasm: " + elem.label
+                    if elem.status == "free":
+                        return elem
+                    else:
+                        print "\tBut it is not free..."
+                        # if elem.ntype in allowed_types and (int(elem.label) == int(label) + 1 or int(elem.label) == int(label) - 1):
+            except AttributeError:
+                print "\tHad issues with pNetNode for: " + str(elem)
+        return None
+
+    def debug(self):
+        print "CYTOPLASM: TEMP=" + str(self.temperature)
+        for p in cytoplasm:
+            if p.status == 'free':
+                print p
+
+    def create_block(self, op, result, node1, node2, pnet=None):
+        # TODO: This codelet should actually determine if we *want* to create this block
+        # e.g. will it get us closer to the goal (or even match the goal)
+        node1.status = 'taken'
+        node2.status = 'taken'
+        pNode = pnet.getNode(str(result))
+
+        cNode = NumboCytoNode(str(result), NumboNodeType.BLOCK, networkNode=pNode)
+        codelets = [[functools.partial(codelet_match_target, cNode), RackUrgency.HIGH]]
+        if not pNode:
+            codelets.append([functools.partial(codelet_find_syntactically_similar, cNode), RackUrgency.MID])
+        else:
+            pNode.activate(level=5)
+        cOpNode = NumboCytoNode(op, NumboNodeType.OPERATION)
+        cOpNode.add_link(NetworkLink(cNode, node1, direction=LinkDirection.UNIDIRECTIONAL))
+        cOpNode.add_link(NetworkLink(cNode, node2, direction=LinkDirection.UNIDIRECTIONAL))
+        cNode.add_link(NetworkLink(cNode, cOpNode, direction=LinkDirection.UNIDIRECTIONAL))
+
+        # TODO: This should actually be related to how "excited" we were to create
+        # this block. e.g. if it was the result of an activation vs a random op
+        cNode.attractiveness = int(result)
+
+        self.append(cNode)
+        self.decrease_temp(decrease=20)
+        return codelets
+
+    def destroy_block(self, node, pnet=None):
+        # blocks are node->op->*node
+        print "CYTOPLASM: Destroying " + str(node)
+        codelets = []
+        # self.items.remove(node)
+        self.items = filter(lambda x: x is not node, self.items)
+        self.decrease_temp(decrease=20)
+        for l in node.links:
+            n = l.node2
+            if n.ntype == NumboNodeType.OPERATION:
+                for l2 in n.links:
+                    l2.node2.status = 'free'
+                    codelets.extend(pnet.activate(l2.node2.label, level=5))
+
+        return codelets
 
 # TODO: Load these in as "facts" via JSON/YAML/whatever
 def initPnet():
@@ -199,66 +321,25 @@ def initPnet():
                                 direction=LinkDirection.BIDIRECTIONAL,
                                 relationship=multopt))
 
+        # salient
+        result = pnet.getNode("100")
+        node = pnet.getNode("5")
+        bnode = pnet.getNode("20")
+
+        times = NetworkNode("*", parent_type=multiplication, long_desc=(node.label + "*" + bnode.label))
+        pnet.addNode(times, False)
+        result.add_link(
+            NetworkLink(result, times, direction=LinkDirection.BIDIRECTIONAL, relationship=multresult))
+
+        times.add_link(
+            NetworkLink(times, NetworkNode(node.label, parent_type=node), direction=LinkDirection.BIDIRECTIONAL,
+                        relationship=multopt))
+        times.add_link(
+            NetworkLink(times, NetworkNode(bnode.label, parent_type=bnode),
+                        direction=LinkDirection.BIDIRECTIONAL,
+                        relationship=multopt))
+
     return pnet
-
-
-def cytoplasm_find_exact(label, cytoplasm, allowed_types=['block', 'brick']):
-    for elem in cytoplasm:
-        if elem.label == label and elem.ntype in allowed_types:
-            print "\tFound exact of " + label + " in cytoplasm"
-            if elem.status == "free":
-                return elem
-            else:
-                print "\tBut it is not free..."
-    return None
-
-
-def cytoplasm_find_less(label, cytoplasm):
-    for elem in cytoplasm:
-        if int(elem.label) == int(label) - 1:
-            print "\tFound one less of " + label + " in cytoplasm"
-            if elem.status == "free":
-                return elem
-            else:
-                print "\tBut it is not free..."
-    return None
-
-
-def cytoplasm_find_greater(label, cytoplasm):
-    for elem in cytoplasm:
-        if int(elem.label) == int(label) + 1:
-            print "\tFound one greater of " + label + " in cytoplasm"
-            if elem.status == "free":
-                return elem
-            else:
-                print "\tBut it is not free..."
-    return None
-
-
-def cytoplasm_find_less(label, cytoplasm):
-    for elem in cytoplasm:
-        if int(elem.label) == int(label) - 1:
-            print "\tFound one less of " + label + " in cytoplasm"
-            if elem.status == "free":
-                return elem
-            else:
-                print "\tBut it is not free..."
-    return None
-
-
-def cytoplasm_find_near(label, cytoplasm, allowed_types=['block', 'brick']):
-    for elem in cytoplasm:
-        try:
-            if elem.ntype in allowed_types and elem.pnetNode.has_link_to(label, "similar"):
-                print "\tFound one near of " + label + " in cytoplasm: " + elem.label
-                if elem.status == "free":
-                    return elem
-                else:
-                    print "\tBut it is not free..."
-                    # if elem.ntype in allowed_types and (int(elem.label) == int(label) + 1 or int(elem.label) == int(label) - 1):
-        except AttributeError:
-            print "\tHad issues with pNetNode for: " + str(elem)
-    return None
 
 
 def codelet_read_target(vision, pnet=None, cytoplasm=None):
@@ -280,9 +361,14 @@ def codelet_read_target(vision, pnet=None, cytoplasm=None):
     if pNode:
         codelets.extend(pNode.activate(level=10))
     else:
-        codelets.append(functools.partial(codelet_find_syntactically_similar, cNode))
+        codelets.append([functools.partial(codelet_find_syntactically_similar, cNode), RackUrgency.MID])
 
     cytoplasm.append(cNode)
+    if int(t) > 20:
+        pnet.activate("multiplication")
+    else:
+        pnet.activate("addition")
+        pnet.activate("subtraction")
 
     return codelets
 
@@ -295,10 +381,11 @@ def codelet_read_brick(vision, pnet=None, cytoplasm=None):
         b = bricks.pop(random.randint(0, len(bricks)-1))
         pNode = pnet.getNode(b)
         cNode = NumboCytoNode(b, NumboNodeType.BRICK, networkNode=pNode)
+        cNode.attractiveness = int(b)
         if pNode:
             codelets.extend(pNode.activate())
         else:
-            codelets.append(functools.partial(codelet_find_syntactically_similar, cNode))
+            codelets.append([functools.partial(codelet_find_syntactically_similar, cNode), RackUrgency.MID])
 
         cytoplasm.append(cNode)
 
@@ -320,9 +407,9 @@ def codelet_seek_reasonable_fascimile(desired, proposed, new_partials, pnet=None
 
     found = []
     for des in desired:
-        node = cytoplasm_find_exact(des, cytoplasm)
+        node = cytoplasm.find_exact(des)
         if node is None or node in found:
-            node = cytoplasm_find_near(des, cytoplasm)
+            node = cytoplasm.find_near(des)
 
             if node is None or node in found:
                 print "\tUnable to find anything similar to " + des
@@ -342,11 +429,14 @@ def codelet_seek_reasonable_fascimile(desired, proposed, new_partials, pnet=None
         # If we are here, we now have found all of our desired nodes
         # partials would be codelet_create_block()
 
+        cytoplasm.decrease_temp()
+
         for codelet in new_partials:
             # this assumes our partials take positional arguments corresponding to what we found
             returned.append(functools.partial(codelet, *found))
 
     else:
+        cytoplasm.increase_temp()
         if attempt < 2:
             # Give it another shot... maybe this is more about reducing urgency?
             returned.append(functools.partial(codelet_seek_reasonable_fascimile, desired, proposed, new_partials,
@@ -355,15 +445,44 @@ def codelet_seek_reasonable_fascimile(desired, proposed, new_partials, pnet=None
     return returned
 
 
-def codelet_match_target(cytoplasm=None, pnet=None):
+def codelet_create_secondary_target(elem, cytoplasm=None, pnet=None):
+    print "CODELET: create_secondary_target"
+    target = int(numboinput['target'])
+    # TODO: Should the block have a link to its secondary so we can destroy it?
+    if elem.ntype is NumboNodeType.BLOCK and elem.status == 'free':
+        elemval = int(elem.label)
+        delta = elemval - target
+        if delta < 0:
+            delta = -delta
+        pNode = pnet.getNode(str(delta))
+        cNode = NumboCytoNode(str(delta), NumboNodeType.SECONDARY, networkNode=pNode)
+        cytoplasm.append(cNode)
+        print "\tCreated SECONDARY target with value " + str(delta)
+        if pNode:
+            pNode.activate(level=5)
+
+        if target % elemval == 0:
+            div = target / elemval
+            print "\tPotential division secondary target with value " + str(div)
+
+    return []
+
+
+def codelet_match_target(block, cytoplasm=None, pnet=None):
     print "CODELET: match_target"
 
-    item = cytoplasm_find_exact(numboinput['target'], cytoplasm, allowed_types=['block'])
-    if item:
+    item = cytoplasm.find_exact(block.label, allowed_types=[NumboNodeType.TARGET, NumboNodeType.SECONDARY])
+    if item and item.ntype == NumboNodeType.TARGET:
         # TODO: We should perhaps just have access to the rack and clear it
         print "Found solution!"
         print str(item)
         sys.exit()
+    elif item and item.ntype == NumboNodeType.SECONDARY:
+        print "\tWe found as secondary, now what?"
+        assert False
+    else:
+        # See if it matches a secondary target
+        return [[functools.partial(codelet_create_secondary_target, block), RackUrgency.HIGH]]
     return None
 
 
@@ -407,6 +526,36 @@ def codelet_create_operation(pnet, cytoplasm):
     return []
 
 
+def codelet_destroy_block(todestroy, pnet=None, cytoplasm=None):
+    print "CODELET: destroy_block " + str(todestroy)
+    if todestroy.status == 'free':
+        cytoplasm.destroy_block(todestroy, pnet=pnet)
+
+    return None
+
+
+def codelet_propose_destruction(pnet=None, cytoplasm=None):
+    """
+    Will attempt to destroy a block that has been created
+    TODO: Should the urgency of this factor in whether or not we will *always* do it?
+    :param pnet:
+    :param cytoplasm:
+    :return:
+    """
+    print "CODELET: propose_destruction"
+    proposed = None
+    for block in cytoplasm:
+        if block.status == 'free' and block.ntype == NumboNodeType.BLOCK:
+            if not proposed or proposed.attractiveness < block.attractiveness:
+                proposed = block
+
+    if proposed:
+        print "\tFound a block to destroy: " + str(proposed)
+        return [functools.partial(codelet_destroy_block, proposed)]
+    else:
+        print "\tNo block"
+
+
 def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplasm=None):
     """
     What this node should do is, based on the target node and "this" node
@@ -438,10 +587,11 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
                         break
                 if not found:
                     print "\tERROR: all " + needed + " already used or not found"
+                    cytoplasm.increase_temp()
                     return None
             else:
                 print "\tERROR: Unable to find " + needed
-                return None
+                assert False
         if str(l.relationship) == 'produces':
             needed = l.node2.label
             links = target_node.find_links(needed)
@@ -457,30 +607,8 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
     inputs = list(map(lambda x: x.label, inputs))
     print "\tAdding codelet seek_reasonable_fascimile of " + str(inputs)
 
-    fasc = functools.partial(codelet_seek_reasonable_fascimile, inputs, produces, [proposed_op])
+    fasc = [functools.partial(codelet_seek_reasonable_fascimile, inputs, produces, [proposed_op]), RackUrgency.LOW]
     codelets.append(fasc)
-    return codelets
-
-
-def cytoplasm_create_block(op, result, node1, node2, cytoplasm=None, pnet=None):
-    # TODO: This codelet should actually determine if we *want* to create this block
-    # e.g. will it get us closer to the goal (or even match the goal)
-    node1.status = 'taken'
-    node2.status = 'taken'
-    pNode = pnet.getNode(str(result))
-    codelets = [codelet_match_target]
-
-    cNode = NumboCytoNode(str(result), NumboNodeType.BLOCK, networkNode=pNode)
-    if not pNode:
-        codelets.append(functools.partial(codelet_find_syntactically_similar, cNode))
-    else:
-        pNode.activate(level=5)
-    cOpNode = NumboCytoNode(op, NumboNodeType.OPERATION)
-    cOpNode.add_link(NetworkLink(cNode, node1, direction=LinkDirection.UNIDIRECTIONAL))
-    cOpNode.add_link(NetworkLink(cNode, node2, direction=LinkDirection.UNIDIRECTIONAL))
-    cNode.add_link(NetworkLink(cNode, cOpNode, direction=LinkDirection.UNIDIRECTIONAL))
-
-    cytoplasm.append(cNode)
     return codelets
 
 
@@ -490,7 +618,7 @@ def codelet_operation_multiply(node1, node2, pnet, cytoplasm):
         a = int(node1.label)
         b = int(node2.label)
         c = a * b
-        return cytoplasm_create_block("x", c, node1, node2, pnet=pnet, cytoplasm=cytoplasm)
+        return cytoplasm.create_block("x", c, node1, node2, pnet=pnet)
 
 
 def codelet_operation_add(node1, node2, pnet=None, cytoplasm=None):
@@ -501,7 +629,7 @@ def codelet_operation_add(node1, node2, pnet=None, cytoplasm=None):
         a = int(node1.label)
         b = int(node2.label)
         c = a + b
-        return cytoplasm_create_block("x", c, node1, node2, pnet=pnet, cytoplasm=cytoplasm)
+        return cytoplasm.create_block("+", c, node1, node2, pnet=pnet)
 
 
 def codelet_operation_subtract(node1, node2, pnet=None, cytoplasm=None):
@@ -512,12 +640,14 @@ def codelet_operation_subtract(node1, node2, pnet=None, cytoplasm=None):
         a = int(node1.label)
         b = int(node2.label)
         c = a - b
-        return cytoplasm_create_block("-", c, node1, node2, pnet=pnet, cytoplasm=cytoplasm)
+        if c > 0:
+            return cytoplasm.create_block("-", c, node1, node2, pnet=pnet)
+        return None
+
 
 def debug_network():
-    print "CYTOPLASM"
-    for p in cytoplasm:
-        print p
+    cytoplasm.debug()
+    print "RACK LENGTH: " + str(len(rack))
 
 
 # print "CODERACK"
@@ -531,21 +661,13 @@ network = initPnet()
 # TODO: Implement a codelet_identify_subtarget
 
 numboinput = dict(target="114", bricks=["12", "20", "7", "1", "6"])
-cytoplasm = []
-
 rack = Rack()
+cytoplasm = Cytoplasm(rack)
 
 rack.add(functools.partial(codelet_read_target, numboinput, pnet=network, cytoplasm=cytoplasm), RackUrgency.HIGH)
 for x in range(0, len(numboinput['bricks'])):
     rack.add(functools.partial(codelet_read_brick, numboinput, pnet=network, cytoplasm=cytoplasm), RackUrgency.MID)
 
-if int(numboinput['target']) > 20:
-    network.activate("multiplication")
-    network.activate("addition")
-    network.activate("subtraction")
-else:
-    network.activate("addition")
-    network.activate("subtraction")
 
 debug_network()
 # Here starts our main run loop, which should probably get encapsulated
@@ -555,9 +677,15 @@ while len(rack) > 0:
     new_codelets = codelet()
     # TODO: this should likely be a set of tuples of (codelet, urgency)
     # or perhaps we just give each codelet access to the rack
-    if new_codelets is not None:
+    if new_codelets is not None and len(new_codelets) > 0:
         for c in new_codelets:
-            rack.add(functools.partial(c, pnet=network, cytoplasm=cytoplasm), RackUrgency.MID)
+            urgency = RackUrgency.LOW
+            if type(c) is list:
+                urgency = c[1]
+                c = c[0]
+            rack.add(functools.partial(c, pnet=network, cytoplasm=cytoplasm), urgency)
+
+    cytoplasm.step_attractiveness()
     debug_network()
 
 

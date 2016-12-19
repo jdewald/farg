@@ -15,5 +15,5 @@
 * TODO: Detect "not much going on" in coderack, to add random ops
 * TODO: Periodic activation of nodes currently in the cytoplasm
 * TODO: "Attractiveness" based on numerical value
-* TODO: "Temperature" of th
+* TODO: "Temperature" 
 
