@@ -5,7 +5,8 @@ Based on reading in _Fluid Concepts and Creative Analogies_
 
 import functools
 import random
-import sys
+
+from gvanim import Animation, render, gif
 
 from coderack import Rack
 from coderack import RackUrgency
@@ -29,6 +30,7 @@ class NumboCytoNode:
         self.status = "free"
         self.links = []
         self.attractiveness = 0
+        self.secondary = None
 
         # TODO: Should this just be the weight/activation level?
         self.attractiveness = 1
@@ -56,21 +58,31 @@ class NumboCytoNode:
                 selfstr += "]"
         return selfstr
 
+    def ga_label(self):
+        return self.label + ":" + self.ntype + "[" + self.status + "]:" + str(self.attractiveness)
+
 
 class Cytoplasm:
     def __init__(self, coderack):
         self.items = []
         self.rack = coderack
+        self.ga = Animation()
+        self.done = False
 
         # the higher the temperature, the more likely
         # the execution of "destructive" codelets
         self.temperature = 50
 
     def append(self, item):
+        self.ga.add_node(item)
+        self.ga.label_node(item, item.ga_label())
+        self.ga.next_step()
         return self.items.append(item)
 
     def extend(self, items):
-        return self.extend(items)
+        for item in items:
+            self.append(item)
+        return self
 
     def __len__(self):
         return len(self.items)
@@ -83,6 +95,7 @@ class Cytoplasm:
         for c in self.items:
             if c.ntype == NumboNodeType.BLOCK and c.attractiveness > 0 and c.status == 'free':
                 c.attractiveness -= 1
+                self.ga.label_node(c, c.ga_label())
         # TODO: Be more consistent in who can add codelets
         return codelets
 
@@ -133,7 +146,7 @@ class Cytoplasm:
     def debug(self):
         print "CYTOPLASM: TEMP=" + str(self.temperature)
         for p in cytoplasm:
-            if p.status == 'free':
+            if p.status != 'taken':
                 print p
 
     def create_block(self, op, result, node1, node2, pnet=None):
@@ -150,9 +163,15 @@ class Cytoplasm:
         else:
             pNode.activate(level=5)
         cOpNode = NumboCytoNode(op, NumboNodeType.OPERATION)
-        cOpNode.add_link(NetworkLink(cNode, node1, direction=LinkDirection.UNIDIRECTIONAL))
-        cOpNode.add_link(NetworkLink(cNode, node2, direction=LinkDirection.UNIDIRECTIONAL))
+        self.ga.add_node(cOpNode)
+        self.ga.label_node(cOpNode, cOpNode.label)
+        cOpNode.add_link(NetworkLink(cOpNode, node1, direction=LinkDirection.UNIDIRECTIONAL))
+        self.ga.add_edge(cOpNode, node1)
+        cOpNode.add_link(NetworkLink(cOpNode, node2, direction=LinkDirection.UNIDIRECTIONAL))
+        self.ga.add_edge(cOpNode, node2)
+
         cNode.add_link(NetworkLink(cNode, cOpNode, direction=LinkDirection.UNIDIRECTIONAL))
+        self.ga.add_edge(cNode, cOpNode)
 
         # TODO: This should actually be related to how "excited" we were to create
         # this block. e.g. if it was the result of an activation vs a random op
@@ -160,14 +179,14 @@ class Cytoplasm:
 
         self.append(cNode)
         self.decrease_temp(decrease=20)
+        self.ga.next_step()
         return codelets
 
     def destroy_block(self, node, pnet=None):
         # blocks are node->op->*node
         print "CYTOPLASM: Destroying " + str(node)
         codelets = []
-        # self.items.remove(node)
-        self.items = filter(lambda x: x is not node, self.items)
+
 
         if node.ntype == NumboNodeType.BLOCK:
             self.decrease_temp(decrease=20)
@@ -176,7 +195,20 @@ class Cytoplasm:
                 if n.ntype == NumboNodeType.OPERATION:
                     for l2 in n.links:
                         l2.node2.status = 'free'
+                        self.ga.remove_edge(node, l2.node2)
+                        self.ga.label_node(l2.node2, l2.node2.ga_label())
                         codelets.extend(pnet.activate(l2.node2.label, level=5))
+
+        # self.items.remove(node)
+        self.items = filter(lambda x: x is not node, self.items)
+        self.ga.remove_node(node)
+        node.status = 'destroyed'
+        if node.secondary:
+            self.ga.remove_node(node.secondary)
+            self.items = filter(lambda x: x is not node.secondary, self.items)
+            node.secondary.status = 'destroyed'
+            node.secondary = None
+        self.ga.next_step()
 
         return codelets
 
@@ -459,6 +491,7 @@ def codelet_create_secondary_target(elem, cytoplasm=None, pnet=None):
         pNode = pnet.getNode(str(delta))
         cNode = NumboCytoNode(str(delta), NumboNodeType.SECONDARY, networkNode=pNode)
         cytoplasm.append(cNode)
+        elem.secondary = cNode
         print "\tCreated SECONDARY target with value " + str(delta)
         if pNode:
             pNode.activate(level=5)
@@ -480,10 +513,11 @@ def codelet_match_target(block, cytoplasm=None, pnet=None):
         # TODO: We should perhaps just have access to the rack and clear it
         print "Found solution!"
         print str(item)
-        sys.exit()
+        cytoplasm.done = True
     elif item and item.ntype == NumboNodeType.SECONDARY:
         block.attractiveness += 10
-        codelets.extend(item.pnetNode.activate(level=10))
+        if item.pnetNode:
+            codelets.extend(item.pnetNode.activate(level=10))
         cytoplasm.destroy_block(item, pnet=pnet)
     else:
         # See if it matches a secondary target
@@ -570,7 +604,7 @@ def codelet_propose_random_operation(pnet=None, cytoplasm=None):
         if c.ntype in [NumboNodeType.BLOCK, NumboNodeType.BRICK] and c.status == 'free' and c.attractiveness > 0:
             noderack.add(c, c.attractiveness)
 
-    if random.randint(1, 100) < 50:
+    if random.randint(1, 100) < 30:
         codelets = [[codelet_propose_random_operation, RackUrgency.MICRO]]
     else:
         codelets = []
@@ -669,7 +703,7 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
 
 
 def codelet_create_block(oplabel, resultlabel, node1, node2, pnet=None, cytoplasm=None):
-    print "CODELET: create_block"
+    print "CODELET: create_block: " + str(resultlabel)
 
     if node1.status == 'free' and node2.status == 'free':
         return cytoplasm.create_block(oplabel, resultlabel, node1, node2, pnet=pnet)
@@ -677,7 +711,7 @@ def codelet_create_block(oplabel, resultlabel, node1, node2, pnet=None, cytoplas
 
 
 def codelet_operation_multiply(node1, node2, pnet=None, cytoplasm=None):
-    print "CODELET: operation_multiply: " + node1.label + "*" + node1.label
+    print "CODELET: operation_multiply: " + node1.label + "*" + node2.label
     if node1.label == "1" or node2.label == "1":
         return None
     if node1.status == 'free' and node2.status == 'free':
@@ -711,8 +745,6 @@ def codelet_operation_multiply(node1, node2, pnet=None, cytoplasm=None):
 def codelet_operation_add(node1, node2, pnet=None, cytoplasm=None):
     print "CODELET: operation_add: " + node1.label + " + " + node2.label
     if node1.status == 'free' and node2.status == 'free':
-        node1.status = 'taken'
-        node2.status = 'taken'
         a = int(node1.label)
         b = int(node2.label)
         c = a + b
@@ -740,10 +772,8 @@ def codelet_operation_add(node1, node2, pnet=None, cytoplasm=None):
 
 
 def codelet_operation_subtract(node1, node2, pnet=None, cytoplasm=None):
-    print "CODELET: operation_subtract: " + node1.label + " + " + node2.label
+    print "CODELET: operation_subtract: " + node1.label + " - " + node2.label
     if node1.status == 'free' and node2.status == 'free':
-        node1.status = 'taken'
-        node2.status = 'taken'
         a = int(node1.label)
         b = int(node2.label)
         c = a - b
@@ -786,7 +816,9 @@ network = initPnet()
 # this set of inputs exercises the ability to identify sub-targets based on subtraction
 # TODO: Implement a codelet_identify_subtarget
 
-numboinput = dict(target="114", bricks=["12", "20", "7", "1", "6"])
+# numboinput = dict(target="114", bricks=["12", "20", "7", "1", "6"])
+# numboinput = dict(target="10", bricks=["2", "3", "5"])
+numboinput = dict(target="100", bricks=["20", "2", "3"])
 rack = Rack()
 cytoplasm = Cytoplasm(rack)
 
@@ -797,7 +829,8 @@ for x in range(0, len(numboinput['bricks'])):
 rack.add(functools.partial(codelet_propose_random_operation, pnet=network, cytoplasm=cytoplasm), RackUrgency.MICRO)
 debug_network()
 # Here starts our main run loop, which should probably get encapsulated
-while len(rack) > 0:
+steps = 0
+while len(rack) > 0 and steps < 100 and not cytoplasm.done:
 
     codelet = rack.take()
     new_codelets = codelet()
@@ -813,5 +846,12 @@ while len(rack) > 0:
 
     cytoplasm.step_attractiveness()
     debug_network()
+    steps += 1
+    if len(rack) < 2:
+        rack.add(functools.partial(codelet_propose_random_operation, pnet=network, cytoplasm=cytoplasm),
+                 RackUrgency.MID)
+        rack.add(functools.partial(codelet_propose_destruction, pnet=network, cytoplasm=cytoplasm), RackUrgency.MICRO)
 
-
+graphs = cytoplasm.ga.graphs()
+files = render(graphs, 'renders/cytoplasm', 'png')
+gif(files, 'renders/cytoplasm', 250)
