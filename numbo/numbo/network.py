@@ -100,7 +100,7 @@ class NetworkNode:
         sub_act = math.floor(level / 2)
 
         returned_codelets = []
-        if self.activation > 3 and len(self.all_codelets()) > 0:
+        if self.activation > 4 and len(self.all_codelets()) > 0:
             #print "\t Activating codelets"
             for c in self.all_codelets():
                 returned_codelets.append(functools.partial(c, target_node=self))

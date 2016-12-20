@@ -10,6 +10,7 @@ class RackUrgency:
     HIGH = 100
     MID = 50
     LOW = 10
+    MICRO = 5
 
 
 class Rack:
@@ -37,7 +38,7 @@ class Rack:
         Probabilistially grab a value
         """
         if not self.total_weight:
-            return Nil
+            return None
 
         ticket = random.randint(1, self.total_weight)
         ticket_sum = 0

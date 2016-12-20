@@ -168,13 +168,15 @@ class Cytoplasm:
         codelets = []
         # self.items.remove(node)
         self.items = filter(lambda x: x is not node, self.items)
-        self.decrease_temp(decrease=20)
-        for l in node.links:
-            n = l.node2
-            if n.ntype == NumboNodeType.OPERATION:
-                for l2 in n.links:
-                    l2.node2.status = 'free'
-                    codelets.extend(pnet.activate(l2.node2.label, level=5))
+
+        if node.ntype == NumboNodeType.BLOCK:
+            self.decrease_temp(decrease=20)
+            for l in node.links:
+                n = l.node2
+                if n.ntype == NumboNodeType.OPERATION:
+                    for l2 in n.links:
+                        l2.node2.status = 'free'
+                        codelets.extend(pnet.activate(l2.node2.label, level=5))
 
         return codelets
 
@@ -383,7 +385,7 @@ def codelet_read_brick(vision, pnet=None, cytoplasm=None):
         cNode = NumboCytoNode(b, NumboNodeType.BRICK, networkNode=pNode)
         cNode.attractiveness = int(b)
         if pNode:
-            codelets.extend(pNode.activate())
+            codelets.extend(pNode.activate(level=10))
         else:
             codelets.append([functools.partial(codelet_find_syntactically_similar, cNode), RackUrgency.MID])
 
@@ -471,6 +473,8 @@ def codelet_create_secondary_target(elem, cytoplasm=None, pnet=None):
 def codelet_match_target(block, cytoplasm=None, pnet=None):
     print "CODELET: match_target"
 
+    codelets = []
+
     item = cytoplasm.find_exact(block.label, allowed_types=[NumboNodeType.TARGET, NumboNodeType.SECONDARY])
     if item and item.ntype == NumboNodeType.TARGET:
         # TODO: We should perhaps just have access to the rack and clear it
@@ -478,12 +482,13 @@ def codelet_match_target(block, cytoplasm=None, pnet=None):
         print str(item)
         sys.exit()
     elif item and item.ntype == NumboNodeType.SECONDARY:
-        print "\tWe found as secondary, now what?"
-        assert False
+        block.attractiveness += 10
+        codelets.extend(item.pnetNode.activate(level=10))
+        cytoplasm.destroy_block(item, pnet=pnet)
     else:
         # See if it matches a secondary target
         return [[functools.partial(codelet_create_secondary_target, block), RackUrgency.HIGH]]
-    return None
+    return codelets
 
 
 def codelet_find_syntactically_similar(needle, pnet=None, cytoplasm=None):
@@ -517,7 +522,7 @@ def codelet_find_syntactically_similar(needle, pnet=None, cytoplasm=None):
         codelets.extend(similar.activate(level=10))
         print "\t" + str(type(needle))
         needle.pnetNode = similar
-    assert similar
+    # assert similar
 
     return codelets
 
@@ -554,6 +559,57 @@ def codelet_propose_destruction(pnet=None, cytoplasm=None):
         return [functools.partial(codelet_destroy_block, proposed)]
     else:
         print "\tNo block"
+
+
+def codelet_propose_random_operation(pnet=None, cytoplasm=None):
+    print "CODELET: propose_random_operation"
+
+    nodes = []
+    noderack = Rack()
+    for c in cytoplasm:
+        if c.ntype in [NumboNodeType.BLOCK, NumboNodeType.BRICK] and c.status == 'free' and c.attractiveness > 0:
+            noderack.add(c, c.attractiveness)
+
+    if random.randint(1, 100) < 50:
+        codelets = [[codelet_propose_random_operation, RackUrgency.MICRO]]
+    else:
+        codelets = []
+    if len(noderack) >= 2:
+        n1 = noderack.take()
+        n2 = noderack.take()
+        if int(n1.label) > int(n2.label):
+            nodes.append(n1)
+            nodes.append(n2)
+        else:
+            nodes.append(n2)
+            nodes.append(n1)
+
+        # pick a random operation
+        # TODO: After picking 2 items, should we pick the operation
+        # based on the ones that would most apply to these selections
+        addition = pnet.getNode("addition")
+        mult = pnet.getNode("multiplication")
+        sub = pnet.getNode("subtraction")
+        oprack = Rack()
+        oprack.add(addition, addition.activation)
+        oprack.add(mult, mult.activation)
+        oprack.add(sub, sub.activation)
+        op = oprack.take()
+        code = None
+        # TODO: Should we use the codelets that are associated with this node?
+        if op == addition:
+            code = codelet_operation_add
+        elif op == mult:
+            code = codelet_operation_multiply
+        elif op == sub:
+            code = codelet_operation_subtract
+
+        # TODO: Urgency should depend on how much we want to create the given item
+        print "\tFound " + str(n1) + " and" + str(n2) + " to apply operation to"
+        codelets.append([functools.partial(code, nodes[0], nodes[1]), RackUrgency.LOW])
+    return codelets
+
+
 
 
 def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplasm=None):
@@ -612,13 +668,44 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
     return codelets
 
 
-def codelet_operation_multiply(node1, node2, pnet, cytoplasm):
-    print "CODELET: operation_multiply"
+def codelet_create_block(oplabel, resultlabel, node1, node2, pnet=None, cytoplasm=None):
+    print "CODELET: create_block"
+
+    if node1.status == 'free' and node2.status == 'free':
+        return cytoplasm.create_block(oplabel, resultlabel, node1, node2, pnet=pnet)
+    return None
+
+
+def codelet_operation_multiply(node1, node2, pnet=None, cytoplasm=None):
+    print "CODELET: operation_multiply: " + node1.label + "*" + node1.label
+    if node1.label == "1" or node2.label == "1":
+        return None
     if node1.status == 'free' and node2.status == 'free':
         a = int(node1.label)
         b = int(node2.label)
         c = a * b
-        return cytoplasm.create_block("x", c, node1, node2, pnet=pnet)
+
+        # figure out our urgency based on how close this gets us to something we want
+        mindelta = 100000
+        for node in cytoplasm:
+            if node.ntype in [NumboNodeType.TARGET, NumboNodeType.SECONDARY]:
+                delta = abs(int(node.label) - c)
+                if delta < mindelta:
+                    mindelta = delta
+
+        urgency = RackUrgency.LOW
+        if mindelta <= 10:
+            urgency = RackUrgency.HIGH
+        elif mindelta <= 20:
+            urgency = RackUrgency.LOW
+        elif mindelta <= 100:
+            urgency = RackUrgency.MICRO
+        else:
+            urgency = 1
+
+        print "\tmindelta is " + str(mindelta)
+
+        return [[functools.partial(codelet_create_block, "x", c, node1, node2), urgency]]
 
 
 def codelet_operation_add(node1, node2, pnet=None, cytoplasm=None):
@@ -629,7 +716,27 @@ def codelet_operation_add(node1, node2, pnet=None, cytoplasm=None):
         a = int(node1.label)
         b = int(node2.label)
         c = a + b
-        return cytoplasm.create_block("+", c, node1, node2, pnet=pnet)
+
+        mindelta = 100000
+        for node in cytoplasm:
+            if node.ntype in [NumboNodeType.TARGET, NumboNodeType.SECONDARY]:
+                delta = abs(int(node.label) - c)
+                if delta < mindelta:
+                    mindelta = delta
+
+        urgency = RackUrgency.LOW
+        if mindelta <= 10:
+            urgency = RackUrgency.HIGH
+        elif mindelta <= 20:
+            urgency = RackUrgency.LOW
+        elif mindelta <= 100:
+            urgency = RackUrgency.MICRO
+        else:
+            urgency = 1
+
+        print "\tmindelta is " + str(mindelta)
+
+        return [[functools.partial(codelet_create_block, "+", c, node1, node2), urgency]]
 
 
 def codelet_operation_subtract(node1, node2, pnet=None, cytoplasm=None):
@@ -641,7 +748,26 @@ def codelet_operation_subtract(node1, node2, pnet=None, cytoplasm=None):
         b = int(node2.label)
         c = a - b
         if c > 0:
-            return cytoplasm.create_block("-", c, node1, node2, pnet=pnet)
+            mindelta = 100000
+            for node in cytoplasm:
+                if node.ntype in [NumboNodeType.TARGET, NumboNodeType.SECONDARY]:
+                    delta = abs(int(node.label) - c)
+                    if delta < mindelta:
+                        mindelta = delta
+
+            urgency = RackUrgency.LOW
+            if mindelta <= 10:
+                urgency = RackUrgency.HIGH
+            elif mindelta <= 20:
+                urgency = RackUrgency.LOW
+            elif mindelta <= 100:
+                urgency = RackUrgency.MICRO
+            else:
+                urgency = 1
+
+            print "\tmindelta is " + str(mindelta)
+
+            return [[functools.partial(codelet_create_block, "-", c, node1, node2), urgency]]
         return None
 
 
@@ -668,7 +794,7 @@ rack.add(functools.partial(codelet_read_target, numboinput, pnet=network, cytopl
 for x in range(0, len(numboinput['bricks'])):
     rack.add(functools.partial(codelet_read_brick, numboinput, pnet=network, cytoplasm=cytoplasm), RackUrgency.MID)
 
-
+rack.add(functools.partial(codelet_propose_random_operation, pnet=network, cytoplasm=cytoplasm), RackUrgency.MICRO)
 debug_network()
 # Here starts our main run loop, which should probably get encapsulated
 while len(rack) > 0:
