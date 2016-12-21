@@ -13,7 +13,6 @@
 # Cytoplasm
 * TODO: Detect "not much going on" in coderack, to add random ops
 * TODO: Periodic activation of nodes currently in the cytoplasm
-* TODO: Associate secondary targets to their source blocks so they go away on destruction
 
 # General
 * TODO: Prevent infinite running from codelets that keep adding

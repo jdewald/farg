@@ -7,9 +7,16 @@ class LinkDirection:
     BIDIRECTIONAL = 2
 
 
+class ActivationLevel:
+    HIGH = 10
+    MID = 5
+    LOW = 2
+
+
 class NetworkNode:
     def __init__(self, label, activation=0, parent_type=None, long_desc=None):
         self.activation = activation
+        self.fixed_activation = None
         self.label = label
         self.long_desc = long_desc if long_desc else label
 
@@ -17,6 +24,8 @@ class NetworkNode:
         self.codelets = []
         self.child_codelets = []
         self.parent = parent_type
+        self.ga = None
+        self.ga_added = False
 
         if parent_type is not None:
             inherit = NetworkLink(self, parent_type, LinkDirection.UNIDIRECTIONAL, relationship="inherits")
@@ -25,6 +34,18 @@ class NetworkNode:
 
     def __str__(self):
         return self.label
+
+    def add_ga(self, if_level=3):
+        if self.activation >= if_level:
+            if not self.ga_added:
+                self.ga_added = True
+                self.ga.add_node(self)
+
+            if self.ga_added:
+                self.ga.label_node(self, self.label)
+                for l in self.links:
+                    l.ga = self.ga
+                    l.add_ga(from_node=self, if_level=if_level)
 
     def link_str(self):
         return str(list(map(lambda x: x.node2.label + "(" + str(x.relationship) + ")", self.links)))
@@ -40,9 +61,18 @@ class NetworkNode:
 
     def add_link(self, link):
         self.links.append(link)
+        if self.ga and not link.ga:
+            link.ga = self.ga
+            link.ga_added = False
+        # if self.ga:
+        #    link.add_ga(from_node=self, if_level=0)
         if link.direction == LinkDirection.BIDIRECTIONAL:
+            bidi = NetworkLink(link.node2, self, relationship=link.relationship, weight=link.weight)
             # TODO: This seems fragile, as we may add new fields
-            link.node2.links.append(NetworkLink(link.node2, self, relationship=link.relationship, weight=link.weight))
+            link.node2.links.append(bidi)
+            if self.ga:
+                bidi.ga = self.ga
+                #    bidi.add_ga(from_node=link.node2, if_level=0)
 
     def links(self):
         return self.links
@@ -93,30 +123,34 @@ class NetworkNode:
 
         visited.append(self)
 
-        self.activation += level
-        # print(('\t' * depth) + "[" + self.long_desc + "]: ACTIVATION@" + str(level) + "->" + str(self.activation))
+        if self.fixed_activation:
+            self.activation = self.fixed_activation
+        else:
+            self.activation += level
+        if self.activation > ActivationLevel.HIGH:
+            self.activation = ActivationLevel.HIGH
+        print(('\t' * depth) + "[" + self.long_desc + str(id(self)) + "]: ACTIVATION@" + str(level) + "->" + str(
+            self.activation))
 
-        # TODO: Use a better stepping formula here
-        sub_act = math.floor(level / 2)
+        if self.activation >= ActivationLevel.MID and self.ga:
+            self.add_ga(if_level=ActivationLevel.LOW)
+            self.ga.label_node(self, self.long_desc + " [" + str(self.activation) + "]")
+            #self.ga.highlight_node(self)
 
         returned_codelets = []
-        if self.activation > 3 and len(self.all_codelets()) > 0:
-            #print "\t Activating codelets"
+        if self.activation >= ActivationLevel.HIGH and len(self.all_codelets()) > 0:
+            # TODO: How do we prevent this from deliverying codelets every time?
+            self.ga.highlight_node(self)
             for c in self.all_codelets():
-                returned_codelets.append(functools.partial(c, target_node=self))
+                returned_codelets.append([functools.partial(c, target_node=self), self.activation])
 
+        # No matter what, we lose some as we propagate through
+        sub_act = level - 1
         if sub_act > 0:
             for l in self.links:
-                end = l.node2
-                if str(l.relationship) is not "requires":
-                    # The activation of a relationship temporarily increases
-                    # the weight of that link for carrying the activation
-                    # energy.
-                    # TODO: How best to implement that?
-                    if type(l.relationship) is not str and l.relationship not in visited:
-                        l.relationship.activate(level=sub_act, visited=visited, depth=depth + 1)
-                    if end not in visited:
-                        returned_codelets.extend(end.activate(level=sub_act, visited=visited, depth=depth + 1))
+                l.transmit(level=sub_act, visited=visited, depth=depth + 1)
+        if self.ga and depth == 0:
+            self.ga.next_step()
         return returned_codelets
 
 
@@ -131,12 +165,68 @@ class NetworkLink:
         self.relationship = relationship
 
         self.weight = weight
+        self.ga = None
+        self.ga_added = False
+
+    def add_ga(self, from_node=None, if_level=3):
+        assert from_node == self.node1
+        if self.ga:
+            if not self.node1.ga_added:
+                self.node1.ga = self.ga
+                self.node1.add_ga(if_level=if_level)
+            if not self.node2.ga_added:
+                self.node2.ga = self.ga
+                self.node2.add_ga(if_level=if_level)
+            if self.node2.ga_added and not self.ga_added:
+                self.ga.add_edge(self.node1, self.node2)
+                self.ga_added = True
+
+    def transmit(self, level=1, depth=0, visited=[]):
+        """
+        Probabilisticly transmit the activation
+        :param level: source activation level
+        :param depth: debugging level for how far we've travelled to get here
+        :param visited: list of already visited nodes
+        :return:
+        """
+        if self in visited:
+            return []
+        visited.append(self)
+
+        end = self.node2
+        act_level = level
+
+        returned_codelets = []
+
+        # if str(self.relationship) is not "requires":
+        # The activation of a relationship temporarily increases
+        # the weight of that link for carrying the activation
+        # energy.
+        # TODO: How best to implement that?
+
+        if type(
+                self.relationship) is not str and self.relationship not in visited and not self.relationship.fixed_activation:
+            returned_codelets.extend(self.relationship.activate(level=act_level, visited=visited, depth=depth + 1))
+        if end not in visited:
+            if str(self.relationship) in ["subtype", "inherits"]:
+                # for these we just "ping" the parent/child
+                act_level = 1
+            else:
+                act_level = math.floor(level * (self.relationship.activation / ActivationLevel.HIGH))
+            if act_level > 0:
+                print(('\t' * depth) + str(act_level) + "/" + str(level) + " via " + self.node1.label + "-" + str(
+                    self.relationship) + "->" + self.node2.label)
+                returned_codelets.extend(end.activate(level=act_level, visited=visited, depth=depth + 1))
+
+        return returned_codelets
 
 
 class Network:
     def __init__(self):
         self.topNodes = dict()
         self.nodes = []
+        self.ga = None
+
 
     def addNode(self, label, top=False):
         if type(label) is str:
@@ -146,20 +236,27 @@ class Network:
         if top:
             self.topNodes[label] = n
         self.nodes.append(n)
+        if self.ga:
+            n.ga = self.ga
 
         return n
 
     # add creae method?
 
-    def getNode(self, label):
+    def getNode(self, label, create=False):
         if label in self.topNodes:
             return self.topNodes[label]
+        elif create:
+            return self.addNode(label, top=True)
         else:
             return None
 
     def activate(self, label, level=10):
         node = self.getNode(label)
         if node is not None:
+            if self.ga and not node.ga:
+                node.ga = self.ga
+                #self.ga.add_node(node)
             return node.activate(level=level, visited=[])
         else:
             print("WARNING: Have no node [" + label + "] in network")

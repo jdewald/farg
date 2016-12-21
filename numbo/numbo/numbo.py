@@ -10,7 +10,7 @@ from gvanim import Animation, render, gif
 
 from coderack import Rack
 from coderack import RackUrgency
-from network import Network, LinkDirection, NetworkLink, NetworkNode
+from network import Network, LinkDirection, NetworkLink, NetworkNode, ActivationLevel
 
 
 # Initialize PNet
@@ -163,10 +163,12 @@ class Cytoplasm:
 
         cNode = NumboCytoNode(str(result), NumboNodeType.BLOCK, networkNode=pNode)
         codelets = [[functools.partial(codelet_match_target, cNode), RackUrgency.HIGH]]
+        # if str(result) == numboinput['target']:
+        #    self.done = True
         if not pNode:
             codelets.append([functools.partial(codelet_find_syntactically_similar, cNode), RackUrgency.MID])
         else:
-            pNode.activate(level=5)
+            pNode.activate(level=ActivationLevel.LOW)
         cOpNode = NumboCytoNode(op, NumboNodeType.OPERATION)
         cOpNode.add_link(NetworkLink(cOpNode, node1, direction=LinkDirection.UNIDIRECTIONAL))
         cOpNode.add_link(NetworkLink(cOpNode, node2, direction=LinkDirection.UNIDIRECTIONAL))
@@ -183,7 +185,6 @@ class Cytoplasm:
             self.ga.add_edge(cOpNode, node1)
             self.ga.add_edge(cOpNode, node2)
             self.ga.add_edge(cNode, cOpNode)
-
         self.append(cNode)
 
         self.decrease_temp(decrease=20)
@@ -206,7 +207,7 @@ class Cytoplasm:
                         if self.ga:
                             self.ga.remove_edge(n, l2.node2)
                             self.ga.label_node(l2.node2, l2.node2.ga_label())
-                        codelets.extend(pnet.activate(l2.node2.label, level=5))
+                        codelets.extend(pnet.activate(l2.node2.label, level=ActivationLevel.LOW))
                     if self.ga:
                         self.ga.remove_node(n)
 
@@ -230,6 +231,7 @@ class Cytoplasm:
 # TODO: Load these in as "facts" via JSON/YAML/whatever
 def initPnet():
     pnet = Network()
+    pnet.ga = Animation()
     # Add our small numbers
     one = pnet.addNode(label="1", top=True)
     two = pnet.addNode(label="2", top=True)
@@ -255,48 +257,22 @@ def initPnet():
 
     # -------
     # These are relationships
-    requires = pnet.addNode("requires")
-    produces = pnet.addNode("produces")  # does this make sense to do vs just saying we require these nodes
-    inheritnode = pnet.addNode("inherits")
-    similar = pnet.addNode("similar")
+    # if we don't make those top level, we need to make sure to pass them in
+    requires = pnet.addNode("requires", top=True)
+    requires.fixed_activation = ActivationLevel.LOW
+    produces = pnet.addNode("produces", top=True)  # does this make sense to do vs just saying we require these nodes
+    produces.fixed_activation = ActivationLevel.LOW
+    inheritnode = pnet.addNode("inherits", top=True)
+    inheritnode.fixed_activation = ActivationLevel.LOW
+    similar = pnet.addNode("similar", top=True)
+    similar.fixed_activation = ActivationLevel.LOW
     # end relationships
 
-    # Addition is a "concept" here
-    addopt = pnet.addNode("additive operand")
-    thesum = pnet.addNode("sum")
-    addition = pnet.addNode("addition", top=True)
-    addition.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_add), children_only=True)
-    # TODO: Should we have a special way of defining quantity?
-    addition.add_link(NetworkLink(addition, addopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    addition.add_link(NetworkLink(addition, addopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    addition.add_link(NetworkLink(addition, thesum, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
 
-    multopt = pnet.addNode("multiplicative operand")
-    multresult = pnet.addNode("multiplicative result")
-    multiplication = pnet.addNode("multiplication", top=True)
-    multiplication.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_multiply),
-                               children_only=True)
-    # TODO: Should we have a special way of defining quantity?
-    multiplication.add_link(
-        NetworkLink(addition, multopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    multiplication.add_link(
-        NetworkLink(addition, multopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    multiplication.add_link(
-        NetworkLink(addition, multresult, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
 
-    # Subtraction
-    minuend = pnet.addNode("minuend")
-    subtrahend = pnet.addNode("subtrahend")
-    difference = pnet.addNode("difference")
-    subtraction = pnet.addNode("subtraction", top=True)
-    subtraction.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_subtract),
-                            children_only=True)
+
     # TODO: Should we have a special way of defining quantity?
-    subtraction.add_link(NetworkLink(addition, minuend, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    subtraction.add_link(
-        NetworkLink(addition, subtrahend, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    subtraction.add_link(
-        NetworkLink(addition, difference, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
+
 
     for a in range(1, 11):
         node = pnet.getNode(str(a))
@@ -309,86 +285,157 @@ def initPnet():
             if b == (a + 1) and not node.has_link_to(bnode.label, similar):
                 node.add_link(NetworkLink(node, bnode, direction=LinkDirection.BIDIRECTIONAL, relationship=similar))
 
-            # ADDITION
-            sum = pnet.getNode((str)(a + b))
-            if not sum:
-                sum = pnet.addNode((str)(a + b))
-
-            # create the instance of addition for these numbers
-            plus = NetworkNode("+", parent_type=addition, long_desc=(node.label + "+" + bnode.label))
-            pnet.addNode(plus, False)
-            # TODO: There is a lot of redundancy in how links get added
-            sum.add_link(NetworkLink(sum, plus, direction=LinkDirection.BIDIRECTIONAL, relationship=thesum))
-
-            # TODO: Should these be bi-directional here?
-            # Note that we are actually creating *instances* of the actual "ideal" type of the number
-            plus.add_link(
-                NetworkLink(plus, NetworkNode(node.label, parent_type=node), direction=LinkDirection.BIDIRECTIONAL,
-                            relationship=addopt))
-            plus.add_link(
-                NetworkLink(plus, NetworkNode(bnode.label, parent_type=bnode), direction=LinkDirection.BIDIRECTIONAL,
-                            relationship=addopt))
+            pnet_add_add_facts(a, b, bnode, node, pnet)
 
             # SUBTRACTION
-            if b - a > 0:
-                diff = pnet.getNode((str)(b - a))
-                if not diff:
-                    diff = pnet.addNode((str)(b - a))
-
-                # create the instance of addition for these numbers
-                minus = NetworkNode("-", parent_type=subtraction, long_desc=(bnode.label + "-" + node.label))
-                pnet.addNode(minus, False)
-                # TODO: There is a lot of redundancy in how links get added
-                diff.add_link(NetworkLink(diff, minus, direction=LinkDirection.BIDIRECTIONAL, relationship=difference))
-
-                # TODO: Should these be bi-directional here?
-                # Note that we are actually creating *instances* of the actual "ideal" type of the number
-                minus.add_link(
-                    NetworkLink(minus, NetworkNode(bnode.label, parent_type=bnode),
-                                direction=LinkDirection.BIDIRECTIONAL,
-                                relationship=minuend))
-                minus.add_link(
-                    NetworkLink(minus, NetworkNode(node.label, parent_type=node), direction=LinkDirection.BIDIRECTIONAL,
-                                relationship=subtrahend))
+            # if b - a > 0:
+            #    pnet_add_sub_facts(a, b, bnode, difference, minuend, node, pnet, subtraction, subtrahend)
 
             # MULTIPLICATION
             if a > 1 and b > 1:
-                result = pnet.getNode((str)(a * b))
-                if not result:
-                    result = pnet.addNode((str)(a * b))
+                pnet_add_mult_facts(a, b, bnode, node, pnet)
 
-                times = NetworkNode("*", parent_type=multiplication, long_desc=(node.label + "*" + bnode.label))
-                pnet.addNode(times, False)
-                result.add_link(
-                    NetworkLink(result, times, direction=LinkDirection.BIDIRECTIONAL, relationship=multresult))
-
-                times.add_link(
-                    NetworkLink(times, NetworkNode(node.label, parent_type=node), direction=LinkDirection.BIDIRECTIONAL,
-                                relationship=multopt))
-                times.add_link(
-                    NetworkLink(times, NetworkNode(bnode.label, parent_type=bnode),
-                                direction=LinkDirection.BIDIRECTIONAL,
-                                relationship=multopt))
-
-        # salient
-        result = pnet.getNode("100")
-        node = pnet.getNode("5")
-        bnode = pnet.getNode("20")
-
-        times = NetworkNode("*", parent_type=multiplication, long_desc=(node.label + "*" + bnode.label))
-        pnet.addNode(times, False)
-        result.add_link(
-            NetworkLink(result, times, direction=LinkDirection.BIDIRECTIONAL, relationship=multresult))
-
-        times.add_link(
-            NetworkLink(times, NetworkNode(node.label, parent_type=node), direction=LinkDirection.BIDIRECTIONAL,
-                        relationship=multopt))
-        times.add_link(
-            NetworkLink(times, NetworkNode(bnode.label, parent_type=bnode),
-                        direction=LinkDirection.BIDIRECTIONAL,
-                        relationship=multopt))
+    # salient
+    # pnet_add_salient_facts(multiplication, multopt, multresult, pnet)
 
     return pnet
+
+
+def pnet_add_salient_facts(multiplication, multopt, multresult, pnet):
+    result = pnet.getNode("100")
+    node = pnet.getNode("5")
+    bnode = pnet.getNode("20")
+    times = NetworkNode("* (to) 100", parent_type=multiplication, long_desc=(node.label + "*" + bnode.label))
+    pnet.addNode(times, False)
+    result.add_link(
+        NetworkLink(result, times, direction=LinkDirection.BIDIRECTIONAL, relationship=multresult))
+    times.add_link(
+        NetworkLink(times,
+                    node,  # NetworkNode(node.label, parent_type=node),
+                    direction=LinkDirection.BIDIRECTIONAL,
+                    relationship=multopt))
+    times.add_link(
+        NetworkLink(times,
+                    bnode,  # NetworkNode(bnode.label, parent_type=bnode),
+                    direction=LinkDirection.BIDIRECTIONAL,
+                    relationship=multopt))
+
+
+def pnet_add_add_facts(a, b, bnode, node, pnet):
+    # Addition is a "concept" here
+    addopt = pnet.getNode("additive operand", create=True)
+    thesum = pnet.getNode("sum", create=True)
+    addition = pnet.getNode("addition", create=True)
+
+    requires = pnet.getNode("requires", create=True)
+    produces = pnet.getNode("produces", create=True)
+
+    addition.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_add), children_only=True)
+    # TODO: Should we have a special way of defining quantity?
+    addition.add_link(NetworkLink(addition, addopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
+    addition.add_link(NetworkLink(addition, addopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
+    addition.add_link(NetworkLink(addition, thesum, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
+
+    # ADDITION
+    sum = pnet.getNode(str(a + b))
+    if not sum:
+        sum = pnet.addNode(str(a + b))
+
+    # create the instance of addition for these numbers
+    plus = NetworkNode("+ (to) " + str(a + b), parent_type=addition, long_desc=(node.label + "+" + bnode.label))
+    pnet.addNode(plus, False)
+    # TODO: There is a lot of redundancy in how links get added
+    sum.add_link(NetworkLink(sum, plus, direction=LinkDirection.BIDIRECTIONAL, relationship=thesum))
+    # TODO: Should these be bi-directional here?
+    # Note that we are actually creating *instances* of the actual "ideal" type of the number
+    plus.add_link(
+        NetworkLink(plus,
+                    node,  # NetworkNode(node.label, parent_type=node),
+                    direction=LinkDirection.BIDIRECTIONAL,
+                    relationship=addopt))
+    plus.add_link(
+        NetworkLink(plus,
+                    bnode,  # NetworkNode(bnode.label, parent_type=bnode),
+                    direction=LinkDirection.BIDIRECTIONAL,
+                    relationship=addopt))
+
+
+def pnet_add_sub_facts(a, b, bnode, difference, minuend, node, pnet, subtraction, subtrahend):
+    # Subtraction
+    minuend = pnet.getNode("minuend", create=True)
+    subtrahend = pnet.getNode("subtrahend", create=True)
+    difference = pnet.getNode("difference", create=True)
+    subtraction = pnet.getNode("subtraction", create=True)
+    requires = pnet.getNode("requires", create=True)
+    produces = pnet.getNode("produces", create=True)
+
+    subtraction.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_subtract),
+                            children_only=True)
+
+    subtraction.add_link(
+        NetworkLink(subtraction, minuend, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
+    subtraction.add_link(
+        NetworkLink(subtraction, subtrahend, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
+    subtraction.add_link(
+        NetworkLink(subtraction, difference, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
+
+    diff = pnet.getNode(str(b - a))
+    if not diff:
+        diff = pnet.addNode(str(b - a))
+
+    # create the instance of addition for these numbers
+    minus = NetworkNode("- (to) " + str(b - a), parent_type=subtraction, long_desc=(bnode.label + "-" + node.label))
+    pnet.addNode(minus, False)
+    # TODO: There is a lot of redundancy in how links get added
+    diff.add_link(NetworkLink(diff, minus, direction=LinkDirection.BIDIRECTIONAL, relationship=difference))
+    # TODO: Should these be bi-directional here?
+    # Note that we are actually creating *instances* of the actual "ideal" type of the number
+    minus.add_link(
+        NetworkLink(minus,
+                    bnode,  # NetworkNode(bnode.label, parent_type=bnode),
+                    direction=LinkDirection.BIDIRECTIONAL,
+                    relationship=minuend))
+    minus.add_link(
+        NetworkLink(minus,
+                    node,  # NetworkNode(node.label, parent_type=node),
+                    direction=LinkDirection.BIDIRECTIONAL,
+                    relationship=subtrahend))
+
+
+def pnet_add_mult_facts(a, b, bnode, node, pnet):
+    multopt = pnet.getNode("multiplicative operand", create=True)
+    multresult = pnet.getNode("multiplicative result", create=True)
+    multiplication = pnet.getNode("multiplication", create=True)
+
+    requires = pnet.getNode("requires")
+    produces = pnet.getNode("produces")
+    multiplication.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_multiply),
+                               children_only=True)
+    # TODO: Should we have a special way of defining quantity?
+    multiplication.add_link(
+        NetworkLink(multiplication, multopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
+    multiplication.add_link(
+        NetworkLink(multiplication, multopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
+    multiplication.add_link(
+        NetworkLink(multiplication, multresult, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
+
+    result = pnet.getNode(str(a * b))
+    if not result:
+        result = pnet.addNode(str(a * b))
+    times = NetworkNode("* (to) " + str(a * b), parent_type=multiplication, long_desc=(node.label + "*" + bnode.label))
+    pnet.addNode(times, False)
+    result.add_link(
+        NetworkLink(result, times, direction=LinkDirection.BIDIRECTIONAL, relationship=multresult))
+    times.add_link(
+        NetworkLink(times,
+                    node,  # NetworkNode(node.label, parent_type=node),
+                    direction=LinkDirection.BIDIRECTIONAL,
+                    relationship=multopt))
+    times.add_link(
+        NetworkLink(times,
+                    bnode,  # NetworkNode(bnode.label, parent_type=bnode),
+                    direction=LinkDirection.BIDIRECTIONAL,
+                    relationship=multopt))
 
 
 def codelet_read_target(vision, pnet=None, cytoplasm=None):
@@ -408,16 +455,16 @@ def codelet_read_target(vision, pnet=None, cytoplasm=None):
     cNode = NumboCytoNode(t, NumboNodeType.TARGET, networkNode=pNode)
     codelets = []
     if pNode:
-        codelets.extend(pNode.activate(level=10))
+        codelets.extend(pNode.activate(level=ActivationLevel.HIGH))
     else:
         codelets.append([functools.partial(codelet_find_syntactically_similar, cNode), RackUrgency.MID])
 
     cytoplasm.append(cNode)
     if int(t) > 20:
-        pnet.activate("multiplication")
+        pnet.activate("multiplication", level=ActivationLevel.MID)
     else:
-        pnet.activate("addition")
-        pnet.activate("subtraction")
+        pnet.activate("addition", level=ActivationLevel.MID)
+        pnet.activate("subtraction", level=ActivationLevel.MID)
 
     return codelets
 
@@ -432,7 +479,7 @@ def codelet_read_brick(vision, pnet=None, cytoplasm=None):
         cNode = NumboCytoNode(b, NumboNodeType.BRICK, networkNode=pNode)
         cNode.attractiveness = int(b)
         if pNode:
-            codelets.extend(pNode.activate(level=10))
+            codelets.extend(pNode.activate(level=ActivationLevel.MID))
         else:
             codelets.append([functools.partial(codelet_find_syntactically_similar, cNode), RackUrgency.MID])
 
@@ -509,7 +556,7 @@ def codelet_create_secondary_target(elem, cytoplasm=None, pnet=None):
         elem.secondary = [cNode]
         print "\tCreated SECONDARY target with value " + str(delta)
         if pNode:
-            pNode.activate(level=5)
+            pNode.activate(level=ActivationLevel.LOW)
 
         if elemval > target and elemval % target == 0:
             pNode = pnet.getNode(str(elemval / target))
@@ -539,7 +586,7 @@ def codelet_match_target(block, cytoplasm=None, pnet=None):
     elif item and item.ntype == NumboNodeType.SECONDARY:
         block.attractiveness += 10
         if item.pnetNode:
-            codelets.extend(item.pnetNode.activate(level=10))
+            codelets.extend(item.pnetNode.activate(level=ActivationLevel.MID))
         cytoplasm.destroy_block(item, pnet=pnet)
     else:
         # See if it matches a secondary target
@@ -575,7 +622,7 @@ def codelet_find_syntactically_similar(needle, pnet=None, cytoplasm=None):
     similar = pnet.getNode(new_val)
     if similar:
         # TODO: do this as a codelet
-        codelets.extend(similar.activate(level=10))
+        codelets.extend(similar.activate(level=ActivationLevel.LOW))
         print "\t" + str(type(needle))
         needle.pnetNode = similar
     # assert similar
@@ -644,13 +691,20 @@ def codelet_propose_random_operation(pnet=None, cytoplasm=None):
         # TODO: After picking 2 items, should we pick the operation
         # based on the ones that would most apply to these selections
         addition = pnet.getNode("addition")
+
         mult = pnet.getNode("multiplication")
         sub = pnet.getNode("subtraction")
         oprack = Rack()
-        oprack.add(addition, addition.activation)
-        if n1.label != '1' and n2.label != '1':
+
+        if mult and n1.label != '1' and n2.label != '1':
             oprack.add(mult, mult.activation)
-        oprack.add(sub, sub.activation)
+
+        if sub:
+            oprack.add(sub, sub.activation)
+
+        if addition:
+            oprack.add(addition, addition.activation)
+
         op = oprack.take()
         code = None
         # TODO: Should we use the codelets that are associated with this node?
@@ -685,6 +739,7 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
     # Fetch inputs
     parent = target_node.parent
 
+    #usedlinks = []
     inputs = []
     produces = None
     for l in parent.links:
@@ -694,10 +749,10 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
             found = False
             if links:
                 for nl in links:
-                    if nl.node2 not in inputs:
-                        inputs.append(nl.node2)
-                        found = True
-                        break
+                    # if nl.node2 not in inputs:
+                    inputs.append(nl.node2)
+                    found = True
+                    #break
                 if not found:
                     print "\tERROR: all " + needed + " already used or not found"
                     cytoplasm.increase_temp()
@@ -839,9 +894,9 @@ network = initPnet()
 # this set of inputs exercises the ability to identify sub-targets based on subtraction
 # TODO: Implement a codelet_identify_subtarget
 
-numboinput = dict(target="114", bricks=["12", "20", "7", "1", "6", "11"])
-# numboinput = dict(target="10", bricks=["2", "3", "5"])
-# numboinput = dict(target="100", bricks=["20", "2", "3"])
+# numboinput = dict(target="114", bricks=["12", "20", "7", "1", "6", "11"])
+numboinput = dict(target="11", bricks=["2", "3", "5"])
+#numboinput = dict(target="10", bricks=["5", "2", "3"])
 rack = Rack()
 cytoplasm = Cytoplasm(rack)
 cytoplasm.enable_animation()
@@ -854,7 +909,7 @@ rack.add(functools.partial(codelet_propose_random_operation, pnet=network, cytop
 debug_network()
 # Here starts our main run loop, which should probably get encapsulated
 steps = 0
-while len(rack) > 0 and steps < 200 and not cytoplasm.done:
+while len(rack) > 0 and steps < 80 and not cytoplasm.done:
 
     codelet = rack.take()
     new_codelets = codelet()
@@ -880,3 +935,8 @@ if cytoplasm.ga:
     graphs = cytoplasm.ga.graphs()
     files = render(graphs, 'renders/cytoplasm', 'png')
     gif(files, 'renders/cytoplasm', 250)
+
+if network.ga:
+    graphs = network.ga.graphs()
+    files = render(graphs, 'renders/network', 'png')
+    gif(files, 'renders/network', 250)
