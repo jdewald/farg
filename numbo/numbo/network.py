@@ -8,15 +8,15 @@ class LinkDirection:
 
 
 class ActivationLevel:
-    HIGH = 10
-    MID = 5
-    LOW = 2
+    HIGH = 10.0
+    MID = 5.0
+    LOW = 2.0
 
 
 class NetworkNode:
-    def __init__(self, label, activation=0, parent_type=None, long_desc=None):
+    def __init__(self, label, activation=1, parent_type=None, long_desc=None, fixed=False):
         self.activation = activation
-        self.fixed_activation = None
+        self.fixed_activation = fixed
         self.label = label
         self.long_desc = long_desc if long_desc else label
 
@@ -30,7 +30,7 @@ class NetworkNode:
         if parent_type is not None:
             inherit = NetworkLink(self, parent_type, LinkDirection.UNIDIRECTIONAL, relationship="inherits")
             self.add_link(inherit)
-            parent_type.add_link(NetworkLink(parent_type, self, LinkDirection.UNIDIRECTIONAL, relationship="subtype"))
+            # parent_type.add_link(NetworkLink(parent_type, self, LinkDirection.UNIDIRECTIONAL, relationship="subtype"))
 
     def __str__(self):
         return self.label
@@ -67,7 +67,9 @@ class NetworkNode:
         # if self.ga:
         #    link.add_ga(from_node=self, if_level=0)
         if link.direction == LinkDirection.BIDIRECTIONAL:
-            bidi = NetworkLink(link.node2, self, relationship=link.relationship, weight=link.weight)
+            bidi = NetworkLink(link.node2, self,
+                               relationship=link.inverse if link.inverse else link.relationship,
+                               weight=link.weight)
             # TODO: This seems fragile, as we may add new fields
             link.node2.links.append(bidi)
             if self.ga:
@@ -111,54 +113,65 @@ class NetworkNode:
 
         return returned
 
-    def activate(self, level=4, visited=[], depth=0):
+    def activate(self, level=4, visited=None, depth=0):
         """
         Activating a node will increase the activation level of this node
         as well as some links. Additionally, it may optionally return a list of
         codelets that should also get activated
         TODO: the activation energy of a node should decay over time
         """
+        if not visited:
+            visited = []
         if self in visited:
             return []
 
         visited.append(self)
 
-        if self.fixed_activation:
-            self.activation = self.fixed_activation
-        else:
+        if not self.fixed_activation:
             self.activation += level
+
         if self.activation > ActivationLevel.HIGH:
             self.activation = ActivationLevel.HIGH
-        print(('\t' * depth) + "[" + self.long_desc + str(id(self)) + "]: ACTIVATION@" + str(level) + "->" + str(
+
+        print(('\t' * depth) + "[" + self.long_desc + "]" + str(id(self)) + ": ACTIVATION@" + str(level) + "->" + str(
             self.activation))
 
-        if self.activation >= ActivationLevel.MID and self.ga:
+        if self.activation >= ActivationLevel.LOW and self.ga:
             self.add_ga(if_level=ActivationLevel.LOW)
             self.ga.label_node(self, self.long_desc + " [" + str(self.activation) + "]")
-            #self.ga.highlight_node(self)
+            if depth == 0:
+                self.ga.highlight_node(self)
 
         returned_codelets = []
-        if self.activation >= ActivationLevel.HIGH and len(self.all_codelets()) > 0:
+        if self.activation >= ActivationLevel.HIGH - 1 and len(self.all_codelets()) > 0:
             # TODO: How do we prevent this from deliverying codelets every time?
             self.ga.highlight_node(self)
+            print "Yay, got codelets out of " + str(self)
+            print "Urgency will be" + str(80 * (self.activation / ActivationLevel.HIGH))
             for c in self.all_codelets():
-                returned_codelets.append([functools.partial(c, target_node=self), self.activation])
+                returned_codelets.append(
+                    [functools.partial(c, target_node=self), 80 * (self.activation / ActivationLevel.HIGH)])
 
         # No matter what, we lose some as we propagate through
         sub_act = level - 1
         if sub_act > 0:
             for l in self.links:
-                l.transmit(level=sub_act, visited=visited, depth=depth + 1)
+                if l not in visited:
+                    returned_codelets.extend(l.transmit(level=sub_act, visited=visited, depth=depth + 1))
+                else:
+                    print str(l) + "in visited"
+
         if self.ga and depth == 0:
             self.ga.next_step()
         return returned_codelets
 
 
 class NetworkLink:
-    def __init__(self, node1, node2, direction=LinkDirection.BIDIRECTIONAL, weight=1, relationship=None):
+    def __init__(self, node1, node2, direction=LinkDirection.BIDIRECTIONAL, weight=1, relationship=None, inverse=None):
         self.node1 = node1
         self.node2 = node2
         self.direction = direction
+        self.inverse = inverse
 
         # the "relationship" is an option NetworkNode element 
         # which tell us the meaning of the link
@@ -181,7 +194,7 @@ class NetworkLink:
                 self.ga.add_edge(self.node1, self.node2)
                 self.ga_added = True
 
-    def transmit(self, level=1, depth=0, visited=[]):
+    def transmit(self, level=1, depth=0, visited=None):
         """
         Probabilisticly transmit the activation
         :param level: source activation level
@@ -189,6 +202,8 @@ class NetworkLink:
         :param visited: list of already visited nodes
         :return:
         """
+        if not visited:
+            visited = []
         if self in visited:
             return []
         visited.append(self)
@@ -204,19 +219,22 @@ class NetworkLink:
         # energy.
         # TODO: How best to implement that?
 
-        if type(
-                self.relationship) is not str and self.relationship not in visited and not self.relationship.fixed_activation:
-            returned_codelets.extend(self.relationship.activate(level=act_level, visited=visited, depth=depth + 1))
+        # if not type(self.relationship) is str:
+        #    print(('\t' * depth) + str(self.relationship) + "[" + str(self.relationship.activation) + "]" + " transmitting " + str(level))
+        # if type(
+        #        self.relationship) is not str and self.relationship not in visited and not self.relationship.fixed_activation:
+        #    returned_codelets.extend(self.relationship.activate(level=act_level, visited=visited, depth=depth + 1))
         if end not in visited:
             if str(self.relationship) in ["subtype", "inherits"]:
-                # for these we just "ping" the parent/child
-                act_level = 1
+                act_level = math.floor(level * (ActivationLevel.MID / ActivationLevel.HIGH))
             else:
                 act_level = math.floor(level * (self.relationship.activation / ActivationLevel.HIGH))
             if act_level > 0:
                 print(('\t' * depth) + str(act_level) + "/" + str(level) + " via " + self.node1.label + "-" + str(
                     self.relationship) + "->" + self.node2.label)
                 returned_codelets.extend(end.activate(level=act_level, visited=visited, depth=depth + 1))
+        else:
+            print "TRANSMIT: " + str(end) + " in visited"
 
         return returned_codelets
 
@@ -227,10 +245,9 @@ class Network:
         self.nodes = []
         self.ga = None
 
-
-    def addNode(self, label, top=False):
+    def addNode(self, label, top=False, activation=0, fixed=False):
         if type(label) is str:
-            n = NetworkNode(label)
+            n = NetworkNode(label, activation=activation, fixed=fixed)
         else:
             n = label
         if top:
@@ -264,3 +281,8 @@ class Network:
 
     def codelets(self):
         pass
+
+    def step_activation(self):
+        for n in self.nodes:
+            if not n.fixed_activation and n.activation > 0:
+                n.activation -= 1

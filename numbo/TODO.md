@@ -9,6 +9,8 @@
 * TODO: Lower activation over time
 * TODO: Apply label activation as weight of link
 * TODO: Load facts from YAML
+* TODO: the basic "10, 2 3 5" should activate the relevant nodes
+* TODO: For some reason activation isn't returning the codelets
 
 # Cytoplasm
 * TODO: Detect "not much going on" in coderack, to add random ops
