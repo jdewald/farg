@@ -1,17 +1,26 @@
 import functools
 import math
 
+import numpy
+
 
 class LinkDirection:
     UNIDIRECTIONAL = 1
     BIDIRECTIONAL = 2
 
-
 class ActivationLevel:
-    HIGH = 10.0
-    MID = 5.0
-    LOW = 2.0
+    MAX = 10
+    HIGH = 4
+    MID = 2
+    LOW = 1
 
+
+def sigmoid(act_level):
+    return 1.0 / (1.0 + numpy.exp(-act_level))
+
+
+def shifted_sigmoid(act_level):
+    return sigmoid(act_level - 2.0)
 
 class NetworkNode:
     def __init__(self, label, activation=1, parent_type=None, long_desc=None, fixed=False):
@@ -35,8 +44,11 @@ class NetworkNode:
     def __str__(self):
         return self.label
 
-    def add_ga(self, if_level=3):
-        if self.activation >= if_level:
+    def get_level(self):
+        return shifted_sigmoid(self.activation)
+
+    def add_ga(self, if_level=0.8):
+        if self.get_level() >= if_level:
             if not self.ga_added:
                 self.ga_added = True
                 self.ga.add_node(self)
@@ -113,7 +125,7 @@ class NetworkNode:
 
         return returned
 
-    def activate(self, level=4, visited=None, depth=0):
+    def activate(self, level=1, visited=None, depth=0):
         """
         Activating a node will increase the activation level of this node
         as well as some links. Additionally, it may optionally return a list of
@@ -130,27 +142,33 @@ class NetworkNode:
         if not self.fixed_activation:
             self.activation += level
 
-        if self.activation > ActivationLevel.HIGH:
-            self.activation = ActivationLevel.HIGH
+        # if self.activation > ActivationLevel.HIGH:
+        #    self.activation = ActivationLevel.HIGH
+
+        sig = self.get_level()
+
 
         print(('\t' * depth) + "[" + self.long_desc + "]" + str(id(self)) + ": ACTIVATION@" + str(level) + "->" + str(
-            self.activation))
+            self.activation) + "=" + str(sig))
 
-        if self.activation >= ActivationLevel.LOW and self.ga:
-            self.add_ga(if_level=ActivationLevel.LOW)
-            self.ga.label_node(self, self.long_desc + " [" + str(self.activation) + "]")
-            if depth == 0:
+        if sig > 0.5 and self.ga:
+            # if self.activation >= ActivationLevel.LOW and self.ga:
+            self.add_ga(if_level=0.7)
+            self.ga.label_node(self, self.long_desc)
+            # if depth == 0:
+            if sig >= 0.8:
                 self.ga.highlight_node(self)
 
+
         returned_codelets = []
-        if self.activation >= ActivationLevel.HIGH - 1 and len(self.all_codelets()) > 0:
+        if self.get_level() >= 0.9 and len(self.all_codelets()) > 0:
             # TODO: How do we prevent this from deliverying codelets every time?
             self.ga.highlight_node(self)
             print "Yay, got codelets out of " + str(self)
-            print "Urgency will be" + str(80 * (self.activation / ActivationLevel.HIGH))
+            print "Urgency will be" + str(90 * self.get_level())
             for c in self.all_codelets():
                 returned_codelets.append(
-                    [functools.partial(c, target_node=self), 80 * (self.activation / ActivationLevel.HIGH)])
+                    [functools.partial(c, target_node=self), math.ceil(90 * (self.get_level()))])
 
         # No matter what, we lose some as we propagate through
         sub_act = level - 1
@@ -194,7 +212,7 @@ class NetworkLink:
                 self.ga.add_edge(self.node1, self.node2)
                 self.ga_added = True
 
-    def transmit(self, level=1, depth=0, visited=None):
+    def transmit(self, level=1.0, depth=0, visited=None):
         """
         Probabilisticly transmit the activation
         :param level: source activation level
@@ -226,9 +244,9 @@ class NetworkLink:
         #    returned_codelets.extend(self.relationship.activate(level=act_level, visited=visited, depth=depth + 1))
         if end not in visited:
             if str(self.relationship) in ["subtype", "inherits"]:
-                act_level = math.floor(level * (ActivationLevel.MID / ActivationLevel.HIGH))
+                act_level = level * 0.5
             else:
-                act_level = math.floor(level * (self.relationship.activation / ActivationLevel.HIGH))
+                act_level = level * self.relationship.get_level()
             if act_level > 0:
                 print(('\t' * depth) + str(act_level) + "/" + str(level) + " via " + self.node1.label + "-" + str(
                     self.relationship) + "->" + self.node2.label)

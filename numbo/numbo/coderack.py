@@ -3,10 +3,12 @@ Implements a weighted list whereby a 'take' from the list will be based on the p
 of the item. Each item will have a weight associated at insertion time, and the total weight
 will be used to choose from
 """
+import math
 import random
 
 
 class RackUrgency:
+    HIGHEST = 200
     HIGH = 100
     MID = 50
     LOW = 10
@@ -40,7 +42,7 @@ class Rack:
         if not self.total_weight:
             return None
 
-        ticket = random.randint(1, self.total_weight)
+        ticket = random.randint(1, math.ceil(self.total_weight))
         ticket_sum = 0
         for i in range(len(self.items)):
             node = self.items[i]

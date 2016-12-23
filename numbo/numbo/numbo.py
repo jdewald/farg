@@ -124,6 +124,9 @@ class Cytoplasm:
     def clear(self):
         del self.items[:]
 
+    def find_by_type(self, allowed_types=[NumboNodeType.BLOCK, NumboNodeType.BRICK], allowed_status=['free']):
+        return filter(lambda x: x.ntype in allowed_types and x.status in allowed_status, self.items)
+
     def find_exact(self, label, allowed_types=['block', 'brick']):
         for elem in self.items:
             if elem.label == label and elem.ntype in allowed_types:
@@ -162,13 +165,13 @@ class Cytoplasm:
         pNode = pnet.getNode(str(result))
 
         cNode = NumboCytoNode(str(result), NumboNodeType.BLOCK, networkNode=pNode)
-        codelets = [[functools.partial(codelet_match_target, cNode), RackUrgency.HIGH]]
-        # if str(result) == numboinput['target']:
-        #    self.done = True
+        codelets = [[functools.partial(codelet_match_target, cNode), RackUrgency.HIGHEST]]
+        if str(result) == numboinput['target']:
+            self.done = True
         if not pNode:
             codelets.append([functools.partial(codelet_find_syntactically_similar, cNode), RackUrgency.MID])
         else:
-            pNode.activate(level=ActivationLevel.LOW)
+            codelets.extend(pNode.activate(level=ActivationLevel.MID))
         cOpNode = NumboCytoNode(op, NumboNodeType.OPERATION)
         cOpNode.add_link(NetworkLink(cOpNode, node1, direction=LinkDirection.UNIDIRECTIONAL))
         cOpNode.add_link(NetworkLink(cOpNode, node2, direction=LinkDirection.UNIDIRECTIONAL))
@@ -195,7 +198,6 @@ class Cytoplasm:
         # blocks are node->op->*node
         print "CYTOPLASM: Destroying " + str(node)
         codelets = []
-
 
         if node.ntype == NumboNodeType.BLOCK:
             self.decrease_temp(decrease=20)
@@ -258,14 +260,15 @@ def initPnet():
     # -------
     # These are relationships
     # if we don't make those top level, we need to make sure to pass them in
-    requires = pnet.addNode("requires", top=True)
-    requires.fixed_activation = ActivationLevel.LOW
-    produces = pnet.addNode("produces", top=True)  # does this make sense to do vs just saying we require these nodes
-    produces.fixed_activation = ActivationLevel.LOW
-    inheritnode = pnet.addNode("inherits", top=True)
-    inheritnode.fixed_activation = ActivationLevel.LOW
-    similar = pnet.addNode("similar", top=True)
-    similar.fixed_activation = ActivationLevel.LOW
+    requires = pnet.addNode("requires", top=True, activation=ActivationLevel.MID, fixed=True)
+    isrequired = pnet.addNode("isrequired", top=True, activation=ActivationLevel.MID, fixed=True)
+    produces = pnet.addNode("produces", top=True, activation=ActivationLevel.MID,
+                            fixed=True)  # does this make sense to do vs just saying we require these nodes
+    isproduced = pnet.addNode("isproduced", top=True, activation=ActivationLevel.MID,
+                              fixed=True)  # does this make sense to do vs just saying we require these nodes
+
+    inheritnode = pnet.addNode("inherits", top=True, activation=ActivationLevel.LOW, fixed=True)
+    similar = pnet.addNode("similar", top=True, activation=ActivationLevel.MID, fixed=True)
     # end relationships
 
 
@@ -323,18 +326,31 @@ def pnet_add_salient_facts(multiplication, multopt, multresult, pnet):
 
 def pnet_add_add_facts(a, b, bnode, node, pnet):
     # Addition is a "concept" here
-    addopt = pnet.getNode("additive operand", create=True)
-    thesum = pnet.getNode("sum", create=True)
-    addition = pnet.getNode("addition", create=True)
+    addopt = pnet.getNode("additive operand", create=False)
+    if not addopt:
+        addopt = pnet.addNode("additive operand", activation=ActivationLevel.MID)
+
+    thesum = pnet.getNode("sum", create=False)
+    if not thesum:
+        thesum = pnet.addNode("sum", activation=ActivationLevel.MID)
 
     requires = pnet.getNode("requires", create=True)
-    produces = pnet.getNode("produces", create=True)
 
-    addition.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_add), children_only=True)
-    # TODO: Should we have a special way of defining quantity?
-    addition.add_link(NetworkLink(addition, addopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    addition.add_link(NetworkLink(addition, addopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    addition.add_link(NetworkLink(addition, thesum, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
+    produces = pnet.getNode("produces", create=True)
+    isrequired = pnet.getNode("isrequired", create=True)
+    isproduced = pnet.getNode("isproduced", create=True)
+    addition = pnet.getNode("addition", create=False)
+    if not addition:
+        addition = pnet.addNode("addition", top=True)
+        addition.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_add), children_only=True)
+        # TODO: Should we have a special way of defining quantity?
+        addition.add_link(NetworkLink(addition, addopt, direction=LinkDirection.BIDIRECTIONAL, relationship=requires,
+                                      inverse=isrequired))
+        addition.add_link(NetworkLink(addition, addopt, direction=LinkDirection.BIDIRECTIONAL, relationship=requires,
+                                      inverse=isrequired))
+        addition.add_link(NetworkLink(addition, thesum, direction=LinkDirection.BIDIRECTIONAL, relationship=produces,
+                                      inverse=isproduced))
+
 
     # ADDITION
     sum = pnet.getNode(str(a + b))
@@ -342,8 +358,8 @@ def pnet_add_add_facts(a, b, bnode, node, pnet):
         sum = pnet.addNode(str(a + b))
 
     # create the instance of addition for these numbers
-    plus = NetworkNode("+ (to) " + str(a + b), parent_type=addition, long_desc=(node.label + "+" + bnode.label))
-    pnet.addNode(plus, False)
+    plus = NetworkNode(str(a) + "+" + str(b), parent_type=addition, long_desc=(node.label + "+" + bnode.label))
+    pnet.addNode(plus, top=False)
     # TODO: There is a lot of redundancy in how links get added
     sum.add_link(NetworkLink(sum, plus, direction=LinkDirection.BIDIRECTIONAL, relationship=thesum))
     # TODO: Should these be bi-directional here?
@@ -365,26 +381,26 @@ def pnet_add_sub_facts(a, b, bnode, difference, minuend, node, pnet, subtraction
     minuend = pnet.getNode("minuend", create=True)
     subtrahend = pnet.getNode("subtrahend", create=True)
     difference = pnet.getNode("difference", create=True)
-    subtraction = pnet.getNode("subtraction", create=True)
+    subtraction = pnet.getNode("subtraction", create=False)
     requires = pnet.getNode("requires", create=True)
     produces = pnet.getNode("produces", create=True)
-
-    subtraction.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_subtract),
-                            children_only=True)
-
-    subtraction.add_link(
-        NetworkLink(subtraction, minuend, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    subtraction.add_link(
-        NetworkLink(subtraction, subtrahend, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    subtraction.add_link(
-        NetworkLink(subtraction, difference, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
+    if not subtraction:
+        subtraction = pnet.addNode("subtraction", top=True)
+        subtraction.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_subtract),
+                                children_only=True)
+        subtraction.add_link(
+            NetworkLink(subtraction, minuend, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
+        subtraction.add_link(
+            NetworkLink(subtraction, subtrahend, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
+        subtraction.add_link(
+            NetworkLink(subtraction, difference, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
 
     diff = pnet.getNode(str(b - a))
     if not diff:
         diff = pnet.addNode(str(b - a))
 
     # create the instance of addition for these numbers
-    minus = NetworkNode("- (to) " + str(b - a), parent_type=subtraction, long_desc=(bnode.label + "-" + node.label))
+    minus = NetworkNode(str(b) + "-" + str(a), parent_type=subtraction, long_desc=(bnode.label + "-" + node.label))
     pnet.addNode(minus, False)
     # TODO: There is a lot of redundancy in how links get added
     diff.add_link(NetworkLink(diff, minus, direction=LinkDirection.BIDIRECTIONAL, relationship=difference))
@@ -403,26 +419,39 @@ def pnet_add_sub_facts(a, b, bnode, difference, minuend, node, pnet, subtraction
 
 
 def pnet_add_mult_facts(a, b, bnode, node, pnet):
-    multopt = pnet.getNode("multiplicative operand", create=True)
-    multresult = pnet.getNode("multiplicative result", create=True)
-    multiplication = pnet.getNode("multiplication", create=True)
+    multopt = pnet.getNode("multiplicative operand", create=False)
+    if not multopt:
+        multopt = pnet.addNode("multiplicative operand", activation=ActivationLevel.MID)
+    multresult = pnet.getNode("multiplicative result", create=False)
+    if not multresult:
+        multresult = pnet.addNode("multiplicative result", activation=ActivationLevel.MID)
+
 
     requires = pnet.getNode("requires")
     produces = pnet.getNode("produces")
-    multiplication.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_multiply),
-                               children_only=True)
+    isrequired = pnet.getNode("isrequired", create=True)
+    isproduced = pnet.getNode("isproduced", create=True)
+    multiplication = pnet.getNode("multiplication", create=False)
+    if not multiplication:
+        multiplication = pnet.addNode("multiplication", top=True)
+        multiplication.add_codelet(functools.partial(codelet_propose_operation, codelet_operation_multiply),
+                                   children_only=True)
+        multiplication.add_link(
+            NetworkLink(multiplication, multopt, direction=LinkDirection.BIDIRECTIONAL, relationship=requires,
+                        inverse=isrequired))
+        multiplication.add_link(
+            NetworkLink(multiplication, multopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires,
+                        inverse=isrequired))
+        multiplication.add_link(
+            NetworkLink(multiplication, multresult, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces,
+                        inverse=isproduced))
+
     # TODO: Should we have a special way of defining quantity?
-    multiplication.add_link(
-        NetworkLink(multiplication, multopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    multiplication.add_link(
-        NetworkLink(multiplication, multopt, direction=LinkDirection.UNIDIRECTIONAL, relationship=requires))
-    multiplication.add_link(
-        NetworkLink(multiplication, multresult, direction=LinkDirection.UNIDIRECTIONAL, relationship=produces))
 
     result = pnet.getNode(str(a * b))
     if not result:
         result = pnet.addNode(str(a * b))
-    times = NetworkNode("* (to) " + str(a * b), parent_type=multiplication, long_desc=(node.label + "*" + bnode.label))
+    times = NetworkNode(str(a) + "*" + str(b), parent_type=multiplication, long_desc=(node.label + "*" + bnode.label))
     pnet.addNode(times, False)
     result.add_link(
         NetworkLink(result, times, direction=LinkDirection.BIDIRECTIONAL, relationship=multresult))
@@ -461,10 +490,10 @@ def codelet_read_target(vision, pnet=None, cytoplasm=None):
 
     cytoplasm.append(cNode)
     if int(t) > 20:
-        pnet.activate("multiplication", level=ActivationLevel.MID)
+        codelets.extend(pnet.activate("multiplication", level=ActivationLevel.HIGH))
     else:
-        pnet.activate("addition", level=ActivationLevel.MID)
-        pnet.activate("subtraction", level=ActivationLevel.MID)
+        codelets.extend(pnet.activate("addition", level=ActivationLevel.HIGH))
+        codelets.extend(pnet.activate("subtraction", level=ActivationLevel.HIGH))
 
     return codelets
 
@@ -479,7 +508,7 @@ def codelet_read_brick(vision, pnet=None, cytoplasm=None):
         cNode = NumboCytoNode(b, NumboNodeType.BRICK, networkNode=pNode)
         cNode.attractiveness = int(b)
         if pNode:
-            codelets.extend(pNode.activate(level=ActivationLevel.MID))
+            codelets.extend(pNode.activate(level=ActivationLevel.HIGH))
         else:
             codelets.append([functools.partial(codelet_find_syntactically_similar, cNode), RackUrgency.MID])
 
@@ -544,6 +573,7 @@ def codelet_seek_reasonable_fascimile(desired, proposed, new_partials, pnet=None
 def codelet_create_secondary_target(elem, cytoplasm=None, pnet=None):
     print "CODELET: create_secondary_target"
     target = int(numboinput['target'])
+    codelets = []
     # TODO: Should the block have a link to its secondary so we can destroy it?
     if elem.ntype is NumboNodeType.BLOCK and elem.status == 'free':
         elemval = int(elem.label)
@@ -556,7 +586,7 @@ def codelet_create_secondary_target(elem, cytoplasm=None, pnet=None):
         elem.secondary = [cNode]
         print "\tCreated SECONDARY target with value " + str(delta)
         if pNode:
-            pNode.activate(level=ActivationLevel.LOW)
+            codelets.extend(pNode.activate(level=ActivationLevel.MID))
 
         if elemval > target and elemval % target == 0:
             pNode = pnet.getNode(str(elemval / target))
@@ -569,7 +599,7 @@ def codelet_create_secondary_target(elem, cytoplasm=None, pnet=None):
             cytoplasm.append(cNode)
             elem.secondary.append(cNode)
 
-    return []
+    return codelets
 
 
 def codelet_match_target(block, cytoplasm=None, pnet=None):
@@ -628,10 +658,6 @@ def codelet_find_syntactically_similar(needle, pnet=None, cytoplasm=None):
     # assert similar
 
     return codelets
-
-
-def codelet_create_operation(pnet, cytoplasm):
-    return []
 
 
 def codelet_destroy_block(todestroy, pnet=None, cytoplasm=None):
@@ -739,7 +765,7 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
     # Fetch inputs
     parent = target_node.parent
 
-    #usedlinks = []
+    usedlinks = []
     inputs = []
     produces = None
     for l in parent.links:
@@ -749,8 +775,10 @@ def codelet_propose_operation(proposed_op, target_node=None, pnet=None, cytoplas
             found = False
             if links:
                 for nl in links:
+                    if nl not in usedlinks:
                     # if nl.node2 not in inputs:
                     inputs.append(nl.node2)
+                    usedlinks.append(nl)
                     found = True
                     #break
                 if not found:
@@ -905,14 +933,23 @@ rack.add(functools.partial(codelet_read_target, numboinput, pnet=network, cytopl
 for x in range(0, len(numboinput['bricks'])):
     rack.add(functools.partial(codelet_read_brick, numboinput, pnet=network, cytoplasm=cytoplasm), RackUrgency.MID)
 
-rack.add(functools.partial(codelet_propose_random_operation, pnet=network, cytoplasm=cytoplasm), RackUrgency.MICRO)
 debug_network()
 # Here starts our main run loop, which should probably get encapsulated
 steps = 0
-while len(rack) > 0 and steps < 80 and not cytoplasm.done:
-
+while len(rack) > 0 and steps < 150 and not cytoplasm.done:
+    print "****" + str(steps) + "****"
     codelet = rack.take()
     new_codelets = codelet()
+
+    if not new_codelets:
+        new_codelets = []
+    if steps % 10 == 0 and steps > 1:
+        # arbitrary and non-random
+        for brick in cytoplasm.find_by_type(allowed_types=[NumboNodeType.TARGET, NumboNodeType.BRICK]):
+            new_codelets.extend(brick.pnetNode.activate(level=ActivationLevel.MID))
+
+    if steps % 10 == 0 and steps > 0:
+        network.step_activation()
     # TODO: this should likely be a set of tuples of (codelet, urgency)
     # or perhaps we just give each codelet access to the rack
     if new_codelets is not None and len(new_codelets) > 0:
@@ -926,10 +963,23 @@ while len(rack) > 0 and steps < 80 and not cytoplasm.done:
     cytoplasm.step_attractiveness()
     debug_network()
     steps += 1
+
+    if steps > 5 and len(cytoplasm.find_by_type()) < 2:
+        rack.add(functools.partial(codelet_propose_destruction, pnet=network, cytoplasm=cytoplasm), RackUrgency.LOW)
+
     if len(rack) < 2:
-        rack.add(functools.partial(codelet_propose_random_operation, pnet=network, cytoplasm=cytoplasm),
-                 RackUrgency.MID)
-        rack.add(functools.partial(codelet_propose_destruction, pnet=network, cytoplasm=cytoplasm), RackUrgency.MICRO)
+        if steps >= len(numboinput['bricks']) and len(
+                cytoplasm.find_by_type(allowed_types=[NumboNodeType.BLOCK], allowed_status=['free', 'taken'])) < 1:
+            rack.add(functools.partial(codelet_propose_random_operation, pnet=network, cytoplasm=cytoplasm),
+                     RackUrgency.LOW)
+    if steps > 20:
+        if cytoplasm.temperature < 10 and len(rack) < 2:
+            rack.add(functools.partial(codelet_propose_destruction, pnet=network, cytoplasm=cytoplasm), RackUrgency.MID)
+        elif cytoplasm.temperature >= 30 and len(rack) < 2:
+            rack.add(functools.partial(codelet_propose_random_operation, pnet=network, cytoplasm=cytoplasm),
+                     RackUrgency.MID)
+
+print "DONE? " + str(cytoplasm.done)
 
 if cytoplasm.ga:
     graphs = cytoplasm.ga.graphs()
